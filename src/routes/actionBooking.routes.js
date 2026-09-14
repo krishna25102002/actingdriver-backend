@@ -44,6 +44,34 @@ router.post(
     actionBookingController.cancelBooking
 );
 
+// Customer generates start/end OTP (in-app, read to the driver).
+router.post(
+    "/customers/bookings/:id/otp",
+    customerAuthMiddleware,
+    actionBookingController.generateTripOtp
+);
+
+// Customer: create Razorpay payment link for the completed trip fare.
+router.post(
+    "/customers/bookings/:id/pay",
+    customerAuthMiddleware,
+    actionBookingController.initiatePayment
+);
+
+// Customer: verify payment signature after the Razorpay page returns.
+router.post(
+    "/customers/bookings/:id/pay/verify",
+    customerAuthMiddleware,
+    actionBookingController.verifyPayment
+);
+
+// Customer: get final fare + payment status.
+router.get(
+    "/customers/bookings/:id/fare",
+    customerAuthMiddleware,
+    actionBookingController.getTripFare
+);
+
 // =====================
 // DRIVER — acting driver booking flow
 // =====================
@@ -81,6 +109,20 @@ router.post(
     "/drivers/bookings/:id/cancel",
     authMiddleware,
     actionBookingController.driverCancelBooking
+);
+
+// Driver: enter the start OTP the customer showed them to start the trip.
+router.post(
+    "/drivers/bookings/:id/start",
+    authMiddleware,
+    actionBookingController.driverStartTrip
+);
+
+// Driver: enter the end OTP to end the trip (computes the final fare).
+router.post(
+    "/drivers/bookings/:id/end",
+    authMiddleware,
+    actionBookingController.driverEndTrip
 );
 
 module.exports = router;

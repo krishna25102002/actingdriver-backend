@@ -27,6 +27,24 @@ const appConfigSchema = new mongoose.Schema({
         default: 5
     },
 
+    // Platform service fee (% of the base fare). Admin-configurable.
+    platformFeePercent: {
+        type: Number,
+        default: 15
+    },
+
+    // Minimum platform service fee in INR (applies when % fee is lower).
+    platformFeeMinAmount: {
+        type: Number,
+        default: 50
+    },
+
+    // GST percent applied on (base fare + platform fee). Admin-configurable.
+    gstPercent: {
+        type: Number,
+        default: 18
+    },
+
     updatedBy: {
         type: String,
         default: ""

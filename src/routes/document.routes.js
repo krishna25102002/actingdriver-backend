@@ -13,7 +13,17 @@ const uploadMiddleware = require("../middlewares/upload.middleware");
 router.post(
     "/upload",
     authMiddleware,
-    uploadMiddleware.uploadDocuments,
+    (req, res, next) => {
+        uploadMiddleware.uploadDocuments(req, res, (err) => {
+            if (err) {
+                return res.status(400).json({
+                    success: false,
+                    message: err.message
+                });
+            }
+            next();
+        });
+    },
     documentController.uploadDocuments
 );
 

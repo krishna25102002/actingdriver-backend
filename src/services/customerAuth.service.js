@@ -55,6 +55,10 @@ exports.login = async (data) => {
         throw new Error("Customer not found");
     }
 
+    if (customer.isDeleted) {
+        throw new Error("This account has been disabled by admin");
+    }
+
     const match = await bcrypt.compare(data.password, customer.password);
 
     if (!match) {

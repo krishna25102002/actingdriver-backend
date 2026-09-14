@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -22,6 +23,7 @@ const customerDriverRequestRoutes = require("./routes/customerDriverRequest.rout
 const { driverRequestRouter } = require("./routes/customerDriverRequest.routes");
 
 const actionBookingRoutes = require("./routes/actionBooking.routes");
+const payLinkRoutes = require("./routes/payLink.routes");
 const publicConfigRoutes = require("./routes/publicConfig.routes");
 
 const app = express();
@@ -33,6 +35,9 @@ app.use(cors());
 app.use(helmet());
 
 app.use(morgan("dev"));
+
+// Serve uploaded driver documents
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // =====================
 // Auth Routes
@@ -158,6 +163,9 @@ app.use("/api/driver/requests", driverRequestRouter);
 // Acting Driver Booking Flow (1 booking -> up to 10 driver requests)
 // =====================
 app.use("/api/action", actionBookingRoutes);
+
+// Public payment-link callback (no auth) — verifies then marks Paid.
+app.use("/api/action/payments", payLinkRoutes);
 
 // =====================
 // Public / Admin App Config (per-hour rate etc.)

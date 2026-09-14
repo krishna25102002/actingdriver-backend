@@ -148,3 +148,85 @@ exports.driverCancelBooking = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// =====================
+// OTP TRIP LIFECYCLE
+// =====================
+
+exports.generateTripOtp = async (req, res) => {
+    try {
+        const result = await actionBookingService.generateTripOtp({
+            customerId: req.customer.customerId,
+            bookingId: req.params.id
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+exports.driverStartTrip = async (req, res) => {
+    try {
+        const result = await actionBookingService.driverStartTrip({
+            driverId: req.driver.driverId,
+            bookingId: req.params.id,
+            enteredOtp: req.body.otp
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+exports.driverEndTrip = async (req, res) => {
+    try {
+        const result = await actionBookingService.driverEndTrip({
+            driverId: req.driver.driverId,
+            bookingId: req.params.id,
+            enteredOtp: req.body.otp
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+exports.initiatePayment = async (req, res) => {
+    try {
+        const result = await actionBookingService.initiatePayment({
+            customerId: req.customer.customerId,
+            bookingId: req.params.id,
+            returnUrl: req.body.returnUrl
+        });
+        res.status(201).json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+exports.verifyPayment = async (req, res) => {
+    try {
+        const result = await actionBookingService.verifyPayment({
+            customerId: req.customer.customerId,
+            bookingId: req.params.id,
+            razorpayOrderId: req.body.orderId,
+            razorpayPaymentId: req.body.paymentId,
+            signature: req.body.signature
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+exports.getTripFare = async (req, res) => {
+    try {
+        const result = await actionBookingService.getTripFare({
+            customerId: req.customer.customerId,
+            bookingId: req.params.id
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};

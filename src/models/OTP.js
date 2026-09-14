@@ -14,6 +14,12 @@ const otpSchema = new mongoose.Schema({
         required: true
     },
 
+    purpose: {
+        type: String,
+        enum: ["start", "end"],
+        default: "start"
+    },
+
     otp: {
         type: String,
         required: true

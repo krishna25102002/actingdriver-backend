@@ -360,3 +360,34 @@ After Customer Backend is ready, connect:
 **Customer App ↔ Booking ↔ Dispatch ↔ Driver App**
 
 Then implement Firebase + Socket.IO + OTP together. 🚀
+
+
+
+
+
+C:\Users\HP\Desktop\Acting Driver apk\Backend>node make-dummy-drivers.js
+◇ injected env (4) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+MongoDB Connected (driver_db)
+
+========================================
+DUMMY DRIVERS READY (10, all APPROVED)
+========================================
+Created : 10
+Updated : 0
+
+Credentials (password for all): Driver@123
+
+Mobile        | Name          | Vehicle | Rating
+-----------------------------------------------
+7770001144   | Tester Final  | Sedan  | 5
+9876540001   | Ravi Kumar    | Sedan  | 4
+9876540002   | Arjun Sharma  | SUV    | 4.1
+9876540003   | Suresh Reddy  | Hatchback| 4.2
+9876540004   | Vikram Singh  | MUV    | 4.3
+9876540005   | Manoj Patil   | Bike   | 4.4
+9876540006   | Kiran Rao     | Sedan  | 4.5
+9876540007   | Rahul Verma   | SUV    | 4.6
+9876540008   | Amit Joshi    | Hatchback| 4.7
+9876540009   | Naveen Gupta  | MUV    | 4.8
+9876540010   | Sunil Nair    | Bike   | 4.9
+9965774500   | test driver   | Sedan  | 5

@@ -4,6 +4,8 @@ const BookingDriverRequest = require("../models/BookingDriverRequest");
 const Driver = require("../models/Driver");
 const Customer = require("../models/Customer");
 const pricing = require("../utils/pricing");
+const otpService = require("./otp.service");
+const razorpay = require("./razorpay.service");
 
 const generateBookingNumber = () => {
     const now = new Date();
@@ -529,6 +531,18 @@ exports.getCustomerBookingById = async (customerId, bookingId) => {
             dropAddress: booking.dropAddress,
             amount: booking.estimatedFare,
             durationHours: booking.estimatedDuration,
+            paymentStatus: booking.paymentStatus,
+            tripStartedAt: booking.tripStartedAt,
+            startedAt: booking.startedAt,
+            completedAt: booking.completedAt,
+            actualHours: booking.actualHours,
+            actualFare: booking.actualFare,
+            fareBreakup: booking.fareBreakup || {},
+            driverEarning: booking.driverEarning,
+            startOtpVerified: booking.startOtpVerified,
+            startOtpExpiresAt: booking.startOtpExpiresAt,
+            endOtpVerified: booking.endOtpVerified,
+            endOtpExpiresAt: booking.endOtpExpiresAt,
             driver: booking.assignedDriverId
                 ? {
                       driverId: booking.assignedDriverId._id,
@@ -569,6 +583,7 @@ exports.getDriverUpcoming = async (driverId) => {
         pickupAddress: b.pickupAddress,
         dropAddress: b.dropAddress,
         amount: b.estimatedFare,
+        startedAt: b.startedAt,
         customer: b.customerId
             ? {
                   name: b.customerId.name,
@@ -579,6 +594,287 @@ exports.getDriverUpcoming = async (driverId) => {
     }));
 
     return { success: true, count: result.length, bookings: result };
+};
+
+/**
+ * Customer: list bookings by status (comma-separated) with request summaries.
+ */
+
+/**
+ * Customer: generate a start/end OTP for their trip. In-app only.
+ * The customer reads it to the driver, who enters it in the driver app.
+ */
+exports.generateTripOtp = async ({ customerId, bookingId }) => {
+    const booking = await Booking.findOne({ _id: bookingId, customerId });
+    if (!booking) throw new Error("Booking not found");
+
+    if (!booking.assignedDriverId && !booking.driverId) {
+        throw new Error("No driver assigned to this booking yet");
+    }
+
+    return otpService.generateOtp({
+        bookingId,
+        customerId,
+        driverId: booking.assignedDriverId || booking.driverId
+    });
+};
+
+/**
+ * Driver: start a trip by entering the start OTP the customer showed them.
+ * Enforced start-gate: the trip may only start on the `fromDate` calendar
+ * date (any time that day).
+ */
+exports.driverStartTrip = async ({ driverId, bookingId, enteredOtp }) => {
+    return otpService.verifyOtp({
+        bookingId,
+        driverId,
+        enteredOtp,
+        purpose: "start",
+        onVerify: async (booking) => {
+            const fromDate = booking.fromDate;
+            if (!fromDate) {
+                throw new Error("Booking has no start date");
+            }
+
+            const today = new Date();
+            const same = sameDay(fromDate, today);
+            if (!same) {
+                throw new Error(
+                    "Trip can only start on the scheduled date (" +
+                    new Date(fromDate).toDateString() +
+                    ")"
+                );
+            }
+
+            booking.bookingStatus = "ONGOING";
+            booking.startOtpVerified = true;
+            booking.startedAt = new Date();
+        }
+    });
+};
+
+/**
+ * Driver: end a trip by entering the end OTP. Computes the final fare
+ * from the billable duration, and records the driver's earnings on the
+ * booking. Platform/signal vs. estimated fare difference is handled by
+ * keeping `actualFare` (final billing) separate from `estimatedFare`.
+ */
+exports.driverEndTrip = async ({ driverId, bookingId, enteredOtp }) => {
+    const booking = await Booking.findOne({
+        _id: bookingId,
+        assignedDriverId: driverId,
+        bookingStatus: "ONGOING"
+    });
+    if (!booking) {
+        throw new Error("Active trip not found for this driver");
+    }
+
+    const startedAt = booking.startedAt;
+    if (!startedAt) {
+        throw new Error("Trip has no start timestamp");
+    }
+
+    const minutes = Math.max(
+        1,
+        Math.round((Date.now() - new Date(startedAt).getTime()) / 60000)
+    );
+
+    const fare = await pricing.computeActualFare({ minutes });
+
+    return otpService.verifyOtp({
+        bookingId,
+        driverId,
+        enteredOtp,
+        purpose: "end",
+        onVerify: async (b) => {
+            b.bookingStatus = "Completed";
+            b.endOtpVerified = true;
+            b.completedAt = new Date();
+
+            b.actualHours = fare.billableHours;
+            b.actualFare = fare.total;
+            b.driverEarning = fare.baseFare;
+
+            b.fareBreakup = b.fareBreakup || {};
+            b.fareBreakup.billableHours = fare.billableHours;
+            b.fareBreakup.baseFare = fare.baseFare;
+            b.fareBreakup.platformFee = fare.platformFee;
+            b.fareBreakup.taxGst = fare.taxGst;
+            b.fareBreakup.total = fare.total;
+            b.fareBreakup.perHourRate = fare.perHourRate;
+
+            await Driver.findByIdAndUpdate(driverId, {
+                accountStatus: "Online",
+                isAvailable: true,
+                currentBookingId: null
+            });
+
+            const result = {
+                billableHours: fare.billableHours,
+                baseFare: fare.baseFare,
+                platformFee: fare.platformFee,
+                taxGst: fare.taxGst,
+                total: fare.total,
+                perHourRate: fare.perHourRate,
+                completedAt: b.completedAt
+            };
+            b._fareSnapshot = result;
+        }
+    }).then((res) => {
+        if (res && res.booking && res.booking._fareSnapshot) {
+            res.fare = res.booking._fareSnapshot;
+            delete res.booking._fareSnapshot;
+        }
+        return res;
+    });
+};
+
+/**
+ * Customer: create a Razorpay Payment Link for the completed trip fare.
+ * Returns a shortLinking URL the app opens with Linking.openURL().
+ */
+exports.initiatePayment = async ({ customerId, bookingId, returnUrl }) => {
+    const booking = await Booking.findOne({
+        _id: bookingId,
+        customerId,
+        bookingStatus: "Completed"
+    }).populate("assignedDriverId", "fullName mobileNumber");
+
+    if (!booking) {
+        throw new Error("Completed booking not found");
+    }
+    if (booking.paymentStatus === "Paid") {
+        throw new Error("Payment already completed for this booking");
+    }
+
+    const amountPaisa = Math.round((booking.actualFare || booking.estimatedFare || 0) * 100);
+
+    if (!razorpay.isConfigured()) {
+        throw new Error(
+            "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to Backend/.env"
+        );
+    }
+
+    const customer = await Customer.findById(customerId).select("name email phone mobileNumber");
+
+    const baseUrl = process.env.PUBLIC_BASE_URL;
+    const link = await razorpay.createPaymentLink({
+        amountInPaise: amountPaisa,
+        description: `DriveGo booking ${booking.bookingNumber}`,
+        customerName: (customer && (customer.name || customer.fullName)) || "DriveGo Customer",
+        customerEmail: (customer && customer.email) || "",
+        customerPhone: (customer && (customer.phone || customer.mobileNumber)) || "",
+        callbackUrl: `${baseUrl}/api/action/payments/pay-link/callback`
+    });
+
+    // `.id` (e.g. "pl_...") is used for server-side verification of the link.
+    booking.paymentOrderId = (link && link.order_id) || "";
+    booking.paymentLinkId = (link && link.id) || "";
+    await booking.save();
+
+    return {
+        success: true,
+        amount: amountPaisa / 100,
+        orderId: booking.paymentOrderId,
+        shortUrl: link && link.short_url ? link.short_url : "",
+        paymentLinkId: booking.paymentLinkId
+    };
+};
+
+/**
+ * Payment-link callback (GET, hit by the payer's browser after payment).
+ * Verifies server-side with Razorpay before marking the booking Paid, so a
+ * forged callback cannot flip a pending booking to paid.
+ */
+exports.handlePaymentLinkCallback = async (paymentLinkId) => {
+    if (!paymentLinkId) throw new Error("Missing payment link id");
+
+    const booking = await Booking.findOne({ paymentLinkId });
+    if (!booking) return { success: false, message: "Unknown payment link" };
+    if (booking.paymentStatus === "Paid") {
+        return { success: true, message: "Payment already completed.", booking };
+    }
+
+    if (!razorpay.isConfigured()) {
+        return { success: false, message: "Razorpay is not configured on the server." };
+    }
+
+    let link;
+    try {
+        link = await razorpay.fetchPaymentLink(paymentLinkId);
+    } catch (e) {
+        return { success: false, message: "Could not verify payment status with Razorpay." };
+    }
+
+    if (link && link.status === "paid") {
+        booking.paymentStatus = "Paid";
+        booking.paymentGatewayId = link.payment_id || booking.paymentGatewayId;
+        await booking.save();
+        return { success: true, message: "Payment verified successfully.", booking };
+    }
+
+    return { success: true, message: "Payment pending.", booking, status: link && link.status };
+};
+
+/**
+ * Customer: verify the Razorpay payment signature. On success, mark the
+ * booking Paid. Uses an atomic update so the driver's payout/earning record
+ * and the booking state are only flipped on a valid, signed payment.
+ */
+exports.verifyPayment = async ({ customerId, bookingId, razorpayOrderId, razorpayPaymentId, signature }) => {
+    const booking = await Booking.findOne({
+        _id: bookingId,
+        customerId,
+        paymentStatus: { $ne: "Paid" }
+    });
+    if (!booking) {
+        throw new Error("Booking not found or already paid");
+    }
+
+    const ok = razorpay.verifySignature({
+        orderId: String(booking.paymentOrderId || razorpayOrderId),
+        paymentId: razorpayPaymentId,
+        signature
+    });
+    if (!ok) {
+        throw new Error("Invalid payment signature");
+    }
+
+    await Booking.updateOne(
+        { _id: booking._id, paymentStatus: { $ne: "Paid" } },
+        {
+            paymentStatus: "Paid",
+            paymentGatewayId: razorpayPaymentId || "",
+            paymentSignature: signature || ""
+        }
+    );
+
+    return { success: true, message: "Payment verified successfully." };
+};
+
+/**
+ * Customer: fetch latest fare + payment status for a completed trip.
+ */
+exports.getTripFare = async ({ customerId, bookingId }) => {
+    const booking = await Booking.findOne({ _id: bookingId, customerId });
+    if (!booking) throw new Error("Booking not found");
+
+    return {
+        success: true,
+        booking: {
+            id: booking._id,
+            bookingNumber: booking.bookingNumber,
+            status: booking.bookingStatus,
+            paymentStatus: booking.paymentStatus,
+            actualHours: booking.actualHours,
+            fareBreakup: booking.fareBreakup || {},
+            actualFare: booking.actualFare,
+            estimatedFare: booking.estimatedFare,
+            startedAt: booking.startedAt,
+            completedAt: booking.completedAt,
+            driverEarning: booking.driverEarning
+        }
+    };
 };
 
 /**
@@ -628,6 +924,14 @@ exports.getCustomerBookings = async (customerId, status) => {
             dropAddress: b.dropAddress,
             amount: b.estimatedFare,
             durationHours: b.estimatedDuration,
+            bookingCreatedAt: b.createdAt,
+            tripType: b.tripType,
+            paymentStatus: b.paymentStatus,
+            acceptedAt: b.acceptedAt,
+            completedAt: b.completedAt,
+            cancelledAt: b.cancelledAt,
+            cancelledBy: b.cancelledBy,
+            cancelReason: b.cancelReason,
             driver: b.assignedDriverId
                 ? {
                       driverId: b.assignedDriverId._id,

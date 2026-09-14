@@ -16,14 +16,22 @@ async function calculateEarnings(driverId, startDate = null) {
 
     const totalTrips = trips.length;
 
+    // Gross earnings = the driver's take for the trip. Action-flow trips store
+    // driverEarning (base fare, fees/commission already handled separately);
+    // legacy trips fall back to estimatedFare.
     const grossEarnings = trips.reduce((sum, trip) => {
+        return sum + (trip.driverEarning || trip.estimatedFare || 0);
+    }, 0);
+
+    // Change this later if commission changes.
+    const commissionRate = 20;
+
+    const commissionable = trips.filter((t) => !t.driverEarning);
+    const commissionBase = commissionable.reduce((sum, trip) => {
         return sum + (trip.estimatedFare || 0);
     }, 0);
 
-    // Change this later if commission changes
-    const commissionRate = 20;
-
-    const commission = grossEarnings * (commissionRate / 100);
+    const commission = commissionBase * (commissionRate / 100);
 
     const netEarnings = grossEarnings - commission;
 

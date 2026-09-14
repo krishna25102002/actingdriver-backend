@@ -11,7 +11,10 @@ exports.getConfig = async () => {
         config: {
             actingDriverPerHourRate: config.actingDriverPerHourRate,
             maxDriversPerBooking: config.maxDriversPerBooking,
-            requestExpiryMinutes: config.requestExpiryMinutes
+            requestExpiryMinutes: config.requestExpiryMinutes,
+            platformFeePercent: config.platformFeePercent,
+            platformFeeMinAmount: config.platformFeeMinAmount,
+            gstPercent: config.gstPercent
         }
     };
 };
@@ -46,6 +49,30 @@ exports.updateConfig = async (adminId, data) => {
         updates.requestExpiryMinutes = min;
     }
 
+    if (data.platformFeePercent !== undefined) {
+        const pct = Number(data.platformFeePercent);
+        if (isNaN(pct) || pct < 0 || pct > 50) {
+            throw new Error("Platform fee percent must be between 0 and 50");
+        }
+        updates.platformFeePercent = pct;
+    }
+
+    if (data.platformFeeMinAmount !== undefined) {
+        const minFee = Number(data.platformFeeMinAmount);
+        if (isNaN(minFee) || minFee < 0) {
+            throw new Error("Platform minimum fee must be a non-negative number");
+        }
+        updates.platformFeeMinAmount = minFee;
+    }
+
+    if (data.gstPercent !== undefined) {
+        const gst = Number(data.gstPercent);
+        if (isNaN(gst) || gst < 0 || gst > 50) {
+            throw new Error("GST percent must be between 0 and 50");
+        }
+        updates.gstPercent = gst;
+    }
+
     updates.updatedBy = String(adminId || "");
 
     const config = await AppConfig.findOneAndUpdate(
@@ -60,7 +87,10 @@ exports.updateConfig = async (adminId, data) => {
         config: {
             actingDriverPerHourRate: config.actingDriverPerHourRate,
             maxDriversPerBooking: config.maxDriversPerBooking,
-            requestExpiryMinutes: config.requestExpiryMinutes
+            requestExpiryMinutes: config.requestExpiryMinutes,
+            platformFeePercent: config.platformFeePercent,
+            platformFeeMinAmount: config.platformFeeMinAmount,
+            gstPercent: config.gstPercent
         }
     };
 };

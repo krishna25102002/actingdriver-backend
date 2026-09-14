@@ -187,6 +187,11 @@ const bookingSchema = new mongoose.Schema({
         default: null
     },
 
+    startedAt: {
+        type: Date,
+        default: null
+    },
+
     completedAt: {
         type: Date,
         default: null
@@ -247,6 +252,75 @@ otpVerified: {
     type: Boolean,
     default: false
 },
+
+    // ============ Acting-driver trip lifecycle (OTP start/end) ============
+    // Customer generates these in the app; the driver enters them to start/end.
+    startOtp: {
+        type: String,
+        default: ""
+    },
+    startOtpExpiresAt: {
+        type: Date,
+        default: null
+    },
+    startOtpVerified: {
+        type: Boolean,
+        default: false
+    },
+    endOtp: {
+        type: String,
+        default: ""
+    },
+    endOtpExpiresAt: {
+        type: Date,
+        default: null
+    },
+    endOtpVerified: {
+        type: Boolean,
+        default: false
+    },
+
+    // Final fare computed when the driver ends the trip.
+    actualHours: {
+        type: Number,
+        default: 0
+    },
+    actualFare: {
+        type: Number,
+        default: 0
+    },
+    fareBreakup: {
+        billableHours: { type: Number, default: 0 },
+        baseFare: { type: Number, default: 0 },
+        platformFee: { type: Number, default: 0 },
+        taxGst: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+        perHourRate: { type: Number, default: 0 }
+    },
+
+    // Number the driver actually receives for this trip (base fare, excl. fees).
+    driverEarning: {
+        type: Number,
+        default: 0
+    },
+
+    // Razorpay payment references.
+    paymentOrderId: {
+        type: String,
+        default: ""
+    },
+    paymentLinkId: {
+        type: String,
+        default: ""
+    },
+    paymentGatewayId: {
+        type: String,
+        default: ""
+    },
+    paymentSignature: {
+        type: String,
+        default: ""
+    },
 
 }, 
 {

@@ -1,17 +1,9 @@
 const Driver = require("../models/Driver");
 
-const Vehicle = require("../models/Vehicle");
-
 const bcrypt = require("bcrypt");
 
 const jwt = require("jsonwebtoken");
 
-console.log("Driver Type:", typeof Driver);
-console.log("Driver:", Driver);
-console.log("Driver.findOne:", Driver.findOne);
-console.log("Driver.create:", Driver.create);
-
-// Log the Driver model to ensure it's loaded correctly   
 exports.register = async (data) => {
 
     const existingDriver = await Driver.findOne({
@@ -41,34 +33,6 @@ exports.register = async (data) => {
         password: hashedPassword
 
     });
-
-    let vehicle = null;
-
-    if (data.vehicleType && (data.registrationNumber || data.vehicleNumber)) {
-
-        vehicle = await Vehicle.create({
-
-            driverId: driver._id,
-
-            vehicleType: data.vehicleType,
-
-            registrationNumber: data.registrationNumber || data.vehicleNumber,
-
-            make: data.make,
-
-            model: data.model,
-
-            year: data.year,
-
-            color: data.color
-
-        });
-
-        driver.vehicleId = vehicle._id;
-
-        await driver.save();
-
-    }
 
     const driverResponse = driver.toObject();
 
@@ -100,9 +64,7 @@ exports.register = async (data) => {
 
         token,
 
-        driver: driverResponse,
-
-        vehicle
+        driver: driverResponse
 
     };
 
@@ -119,6 +81,12 @@ exports.login = async (data) => {
     if (!driver) {
 
         throw new Error("Driver not found");
+
+    }
+
+    if (driver.isDeleted) {
+
+        throw new Error("This account has been disabled by admin");
 
     }
 

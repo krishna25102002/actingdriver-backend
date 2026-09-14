@@ -92,9 +92,57 @@ const calculateAmount = async ({ startTime, endTime, fromDate, toDate }) => {
     };
 };
 
+/**
+ * Build a full fare breakdown from a base fare using the global fee config.
+ * platformFee = max(minFee, pct% of base); GST applies on (base + platformFee).
+ */
+const roundRupee = (n) => Math.round(n);
+
+const buildFareBreakdown = (base, cfg) => {
+    const pct = cfg.platformFeePercent != null ? cfg.platformFeePercent : 15;
+    const pMin = cfg.platformFeeMinAmount != null ? cfg.platformFeeMinAmount : 50;
+    const gst = cfg.gstPercent != null ? cfg.gstPercent : 18;
+
+    const platformFee = roundRupee(Math.max(pMin, base * (pct / 100)));
+    const taxGst = roundRupee((base + platformFee) * (gst / 100));
+    const total = base + platformFee + taxGst;
+
+    return {
+        baseFare: base,
+        platformFee,
+        taxGst,
+        total,
+        perHourRate: cfg.actingDriverPerHourRate || 210
+    };
+};
+
+/**
+ * Compute the actual trip fare for a completed acting-driver trip:
+ * bills to the next half-hour block (min 1 hour), adds 15% platform fee
+ * (min ₹50) and 18% GST on (base + platform fee). Driver earns `baseFare`.
+ *
+ * @param {Object} opts
+ * @param {number} opts.minutes   - actual trip duration in minutes (> 0)
+ * @param {Date}   [opts.tripStartedAt]
+ * @returns {Promise<{billableHours, baseFare, platformFee, taxGst, total, perHourRate}>}
+ */
+const computeActualFare = async ({ minutes }) => {
+    const mins = Math.max(1, Math.ceil(Number(minutes) || 0));
+    const billableHours = Math.max(1, Math.ceil(mins / 30) / 2);
+    const cfg = await getConfig();
+    const baseFare = roundRupee(billableHours * (cfg.actingDriverPerHourRate || 210));
+    return {
+        billableHours,
+        baseFare,
+        ...buildFareBreakdown(baseFare, cfg)
+    };
+};
+
 module.exports = {
     getPerHourRate,
     getConfig,
     durationHours,
-    calculateAmount
+    calculateAmount,
+    computeActualFare,
+    buildFareBreakdown
 };
