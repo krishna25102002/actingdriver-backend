@@ -121,4 +121,25 @@ router.delete(
     adminController.deleteBooking
 );
 
+// Admin: force reassign the current driver of a booking (finds a replacement).
+router.post(
+    "/bookings/:bookingId/reassign",
+    adminMiddleware,
+    adminController.reassignBookingDriver
+);
+
+// Admin: cancel a booking outright (customer is NOT charged a fee).
+router.post(
+    "/bookings/:bookingId/cancel",
+    adminMiddleware,
+    adminController.adminCancelBooking
+);
+
+// Admin: manually mark the assigned driver as a no-show (emergency replacement).
+router.post(
+    "/bookings/:bookingId/driver-no-show",
+    adminMiddleware,
+    adminController.adminMarkDriverNoShow
+);
+
 module.exports = router;

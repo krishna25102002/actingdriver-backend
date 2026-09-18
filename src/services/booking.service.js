@@ -2,6 +2,7 @@ const Booking = require("../models/Booking");
 const Driver = require("../models/Driver");
 const CustomerDriverRequest = require("../models/CustomerDriverRequest");
 const dispatchService = require("./dispatch.service");
+const driverPolicy = require("../utils/driverPolicy");
 
 /**
  * Create Booking
@@ -144,6 +145,9 @@ exports.rejectBooking = async (bookingId, driverId) => {
         throw new Error("Booking not found");
 
     }
+
+    // Strike policy: X skips/cancels allowed, the next one is restricted.
+    await driverPolicy.assertNotRestricted(driverId);
 
     await Booking.findByIdAndUpdate(
 

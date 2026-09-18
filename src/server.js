@@ -4,8 +4,13 @@ console.log(process.env.MONGO_URI);
 const app = require("./app");
 
 const connectDB = require("./config/db");
+const { startCronJobs } = require("./cron/jobRunner");
 
-connectDB();
+connectDB().then(() => {
+    startCronJobs();
+}).catch((err) => {
+    console.log("DB init failed:", err && err.message);
+});
 
 const PORT = process.env.PORT || 5000;
 

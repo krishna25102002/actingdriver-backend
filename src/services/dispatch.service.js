@@ -149,6 +149,17 @@ exports.expandSearchRadius = async (bookingId) => {
 
     }
 
+    if (
+        booking.bookingStatus === "Cancelled" ||
+        booking.bookingStatus === "Completed"
+    ) {
+
+        console.log("Booking no longer active — skipping dispatch");
+
+        return;
+
+    }
+
     if (booking.dispatchRadius >= 50) {
 
         booking.bookingStatus = "Cancelled";

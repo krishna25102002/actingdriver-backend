@@ -5,6 +5,14 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "39823923"
   },
+  "variable": [
+    { "key": "baseUrl", "value": "http://192.168.0.9:5000", "type": "default" },
+    { "key": "customerToken", "value": "", "type": "default" },
+    { "key": "driverToken", "value": "", "type": "default" },
+    { "key": "adminToken", "value": "", "type": "default" },
+    { "key": "bookingId", "value": "", "type": "default" },
+    { "key": "requestId", "value": "", "type": "default" }
+  ],
   "item": [
     {
       "name": "register",
@@ -205,6 +213,262 @@
         "header": []
       },
       "response": []
+    },
+    {
+      "name": "Cancellation / Reassignment / No-Show (TC001-TC016)",
+      "item": [
+        {
+          "name": "Customer - preview cancellation fee",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{customerToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/customers/bookings/{{bookingId}}/cancel/preview",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "customers", "bookings", "{{bookingId}}", "cancel", "preview"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Customer - cancel booking",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{customerToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Changed my plans\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/action/customers/bookings/{{bookingId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "customers", "bookings", "{{bookingId}}", "cancel"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Customer - list action bookings (by status)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{customerToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/customers/bookings?status=CONFIRMED",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "customers", "bookings"],
+              "query": [
+                { "key": "status", "value": "CONFIRMED" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Customer - action booking detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{customerToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/customers/bookings/{{bookingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "customers", "bookings", "{{bookingId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - mark en route",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/bookings/{{bookingId}}/en-route",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "bookings", "{{bookingId}}", "en-route"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - mark arrived",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/bookings/{{bookingId}}/arrived",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "bookings", "{{bookingId}}", "arrived"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - report unavailable (reassignment)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"DRIVER_VEHICLE_ISSUE\",\n  \"description\": \"Brake maintenance needed\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/bookings/{{bookingId}}/unavailable",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "bookings", "{{bookingId}}", "unavailable"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - upcoming action bookings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/bookings/upcoming",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "bookings", "upcoming"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - accept (replacement) booking request",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/booking-requests/{{requestId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "booking-requests", "{{requestId}}", "accept"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Driver - reject (replacement) booking request",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{driverToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Scheduling conflict\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/action/drivers/booking-requests/{{requestId}}/reject",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "action", "drivers", "booking-requests", "{{requestId}}", "reject"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin - reassign booking driver",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/bookings/{{bookingId}}/reassign",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "bookings", "{{bookingId}}", "reassign"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin - cancel booking (no customer fee)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Cancelled by support\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/bookings/{{bookingId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "bookings", "{{bookingId}}", "cancel"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin - mark driver no-show",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/bookings/{{bookingId}}/driver-no-show",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "bookings", "{{bookingId}}", "driver-no-show"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Config - get app config",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "config"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Admin - update cancellation/no-show config",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cancellationFeeFlat\": 50,\n  \"cancellationFeePercent\": 10,\n  \"cancellationFeeArrivedFlat\": 100,\n  \"cancellationFeeArrivedPercent\": 25,\n  \"noShowCustomerFeeFlat\": 100,\n  \"noShowCustomerFeePercent\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "config"]
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ]
 }

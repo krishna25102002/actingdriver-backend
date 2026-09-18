@@ -458,3 +458,85 @@ exports.deleteBooking = async (req, res) => {
     }
 
 };
+
+// ============================
+// Admin — cancellation & reassignment support
+// ============================
+
+exports.reassignBookingDriver = async (req, res) => {
+
+    try {
+
+        const result = await adminService.reassignBookingDriver(
+            req.admin.adminId,
+            req.params.bookingId,
+            req.body
+        );
+
+        res.status(200).json(result);
+
+    } catch (error) {
+
+        res.status(400).json({
+
+            success: false,
+
+            message: error.message
+
+        });
+
+    }
+
+};
+
+exports.adminCancelBooking = async (req, res) => {
+
+    try {
+
+        const result = await adminService.adminCancelBooking(
+            req.admin.adminId,
+            req.params.bookingId,
+            req.body
+        );
+
+        res.status(200).json(result);
+
+    } catch (error) {
+
+        res.status(400).json({
+
+            success: false,
+
+            message: error.message
+
+        });
+
+    }
+
+};
+
+exports.adminMarkDriverNoShow = async (req, res) => {
+
+    try {
+
+        const result = await adminService.adminMarkDriverNoShow(
+            req.admin.adminId,
+            req.params.bookingId,
+            req.body
+        );
+
+        res.status(200).json(result);
+
+    } catch (error) {
+
+        res.status(400).json({
+
+            success: false,
+
+            message: error.message
+
+        });
+
+    }
+
+};

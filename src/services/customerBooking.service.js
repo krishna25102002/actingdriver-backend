@@ -2,6 +2,7 @@ const Booking = require("../models/Booking");
 const CustomerVehicle = require("../models/CustomerVehicle");
 const Driver = require("../models/Driver");
 const dispatchService = require("./dispatch.service");
+const reassignment = require("./reassignment.service");
 
 const generateBookingNumber = () => {
 
@@ -182,24 +183,68 @@ exports.cancelBooking = async (customerId, bookingId, reason) => {
         throw new Error("Booking not found");
     }
 
-    if (
-        booking.bookingStatus === "Completed" ||
-        booking.bookingStatus === "Cancelled"
-    ) {
-        throw new Error("Booking cannot be cancelled");
+    // Atomic claim so a concurrent accept/cancel cannot both win.
+    const claim = await Booking.findOneAndUpdate(
+        {
+            _id: bookingId,
+            customerId,
+            bookingStatus: { $nin: ["Completed", "Cancelled"] }
+        },
+        {
+            $set: {
+                bookingStatus: "Cancelled",
+                cancelledBy: "Customer",
+                cancelReason: reason || "Cancelled by customer",
+                cancelledAt: new Date(),
+                flowStatus: "CUSTOMER_CANCELLED",
+                driverAssignmentStatus: "CANCELLED"
+            },
+            $push: {
+                flowStatusHistory: {
+                    status: "CUSTOMER_CANCELLED",
+                    at: new Date(),
+                    by: "customer"
+                }
+            }
+        },
+        { returnDocument: "after" }
+    );
+
+    if (!claim) {
+        throw new Error("Booking was already cancelled or modified.");
     }
 
-    booking.bookingStatus = "Cancelled";
-    booking.cancelledBy = "Customer";
-    booking.cancelReason = reason || "Cancelled by customer";
-    booking.cancelledAt = new Date();
+    // Release every dispatched driver, then free the assigned driver slot so
+    // the driver can take other trips (previously the driver stayed stuck).
+    await dispatchService.bookingCancelled(claim._id);
+    const assignedDriverId =
+        (claim.assignedDriverId && claim.assignedDriverId._id) ||
+        claim.assignedDriverId ||
+        claim.driverId;
+    if (assignedDriverId) {
+        await Driver.findByIdAndUpdate(assignedDriverId, {
+            currentBookingId: null,
+            currentDispatchRequest: null,
+            accountStatus: "Online",
+            isAvailable: true
+        });
+    }
 
-    await booking.save();
+    await reassignment.createCancellationRecord({
+        booking: claim,
+        driverId: assignedDriverId || null,
+        cancelledBy: "CUSTOMER",
+        reason: reason || "cancelled by customer",
+        driverArrived: false,
+        cancellationFee: 0,
+        amountDue: 0
+    });
 
     return {
         success: true,
         message: "Booking cancelled successfully",
-        booking
+        booking: claim
     };
 
 };
+ 

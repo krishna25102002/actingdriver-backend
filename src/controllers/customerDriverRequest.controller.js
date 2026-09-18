@@ -54,11 +54,12 @@ exports.getRequestById = async (req, res) => {
 
         res.json(result);
 
-    } catch (error) {
+} catch (error) {
 
-        res.status(404).json({
+        res.status(400).json({
             success: false,
-            message: error.message
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
         });
 
     }

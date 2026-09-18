@@ -2,6 +2,7 @@ const CustomerDriverRequest = require("../models/CustomerDriverRequest");
 const Driver = require("../models/Driver");
 const Customer = require("../models/Customer");
 const Booking = require("../models/Booking");
+const driverPolicy = require("../utils/driverPolicy");
 
 exports.createRequest = async (customerId, data) => {
 
@@ -119,41 +120,69 @@ exports.getPendingRequestsForDriver = async (driverId) => {
 
 exports.acceptRequest = async (driverId, requestId) => {
 
-    const request = await CustomerDriverRequest.findOne({
-        _id: requestId,
-        driverId
-    });
+    // ATOMIC first-accept-wins: claim this driver's request in a single update.
+    // If it fails, the request was already handled by someone else.
+    const claim = await CustomerDriverRequest.findOneAndUpdate(
+        {
+            _id: requestId,
+            driverId,
+            requestStatus: "Requested"
+        },
+        {
+            $set: {
+                requestStatus: "Accepted"
+            }
+        },
+        { returnDocument: "after" }
+    );
 
-    if (!request) {
-        throw new Error("Request not found");
-    }
-
-    if (request.requestStatus !== "Requested") {
+    if (!claim) {
+        const existing = await CustomerDriverRequest.findOne({
+            _id: requestId,
+            driverId
+        });
+        if (!existing) {
+            throw new Error("Request not found");
+        }
         throw new Error("Request already handled");
     }
 
-    request.requestStatus = "Accepted";
-    await request.save();
-
+    // Close every other pending request for this customer so no other driver
+    // can accept a parallel request and create a duplicate booking afterwards.
     await CustomerDriverRequest.updateMany(
         {
-            _id: { $ne: request._id },
-            customerId: request.customerId,
+            customerId: claim.customerId,
+            _id: { $ne: claim._id },
             requestStatus: "Requested"
         },
         { requestStatus: "Cancelled" }
     );
 
+    // If a rival request for this customer was already accepted (booking got
+    // created first), roll this claim back to avoid a duplicate booking.
+    const rival = await CustomerDriverRequest.findOne({
+        customerId: claim.customerId,
+        _id: { $ne: claim._id },
+        requestStatus: "Accepted"
+    });
+    if (rival) {
+        await CustomerDriverRequest.updateOne(
+            { _id: claim._id },
+            { $set: { requestStatus: "Cancelled" } }
+        );
+        throw new Error("Another driver has already accepted a request from this customer.");
+    }
+
     const booking = await Booking.create({
         bookingNumber: `BKREQ${Date.now()}`,
-        customerId: request.customerId,
+        customerId: claim.customerId,
         driverId,
-        pickupAddress: request.pickupAddress,
-        dropAddress: request.dropAddress,
-        pickupLocation: request.pickupLocation,
-        dropLocation: request.dropLocation,
-        estimatedFare: request.estimatedFare,
-        tripType: request.tripType,
+        pickupAddress: claim.pickupAddress,
+        dropAddress: claim.dropAddress,
+        pickupLocation: claim.pickupLocation,
+        dropLocation: claim.dropLocation,
+        estimatedFare: claim.estimatedFare,
+        tripType: claim.tripType,
         bookingStatus: "Accepted",
         dispatchStatus: "Accepted",
         acceptedAt: new Date()
@@ -169,7 +198,7 @@ exports.acceptRequest = async (driverId, requestId) => {
         success: true,
         message: "Booking request accepted",
         booking,
-        request
+        request: claim
     };
 };
 
@@ -187,6 +216,9 @@ exports.rejectRequest = async (driverId, requestId) => {
     if (request.requestStatus !== "Requested") {
         throw new Error("Request already handled");
     }
+
+    // Strike policy: X skips/cancels allowed, the next one is restricted.
+    await driverPolicy.assertNotRestricted(driverId);
 
     request.requestStatus = "Rejected";
     await request.save();

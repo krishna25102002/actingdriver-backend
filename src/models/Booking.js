@@ -204,11 +204,59 @@ const bookingSchema = new mongoose.Schema({
 
     cancelledBy: {
         type: String,
-        enum: ["Customer", "Driver", "Admin"],
+        enum: ["Customer", "Driver", "Admin", "System"],
         default: null
     },
 
     cancelledAt: {
+        type: Date,
+        default: null
+    },
+
+    // Amount the customer owes (e.g. cancellation / no-show fee). Never a refund:
+    // Pay After Service means nothing was collected before, so a cancelled trip
+    // simply becomes an amount due if business rules apply.
+    amountDue: {
+        type: Number,
+        default: 0
+    },
+
+    // Cancellation / no-show fee computed by the backend (never trusted from client).
+    cancellationFee: {
+        type: Number,
+        default: 0
+    },
+
+    noShowFee: {
+        type: Number,
+        default: 0
+    },
+
+    // Driver unavailability (reassignment) details.
+    unavailabilityReason: {
+        type: String,
+        default: ""
+    },
+
+    unavailabilityDescription: {
+        type: String,
+        default: ""
+    },
+
+    // Reassignment window / deadline plumbing.
+    replacementSearchStartedAt: {
+        type: Date,
+        default: null
+    },
+
+    reassignmentDeadline: {
+        type: Date,
+        default: null
+    },
+
+    // Customer no-show window: set when the driver arrives; the booking is
+    // marked NO_SHOW once this passes and the trip has not started.
+    noShowWindowEndsAt: {
         type: Date,
         default: null
     },
@@ -320,6 +368,45 @@ otpVerified: {
     paymentSignature: {
         type: String,
         default: ""
+    },
+
+    flowStatus: {
+        type: String,
+        default: "DRIVER_SEARCHING"
+    },
+
+    flowStatusHistory: [{
+        status: String,
+        at: Date,
+        by: {
+            type: String,
+            enum: ["customer", "driver", "system", "admin"],
+            default: "system"
+        }
+    }],
+
+    driverAssignmentStatus: {
+        type: String,
+        enum: [
+            "SEARCHING",
+            "ASSIGNED",
+            "CONFIRMED",
+            "EN_ROUTE",
+            "ARRIVED",
+            "REASSIGNING",
+            "REASSIGNED",
+            "UNAVAILABLE",
+            "NO_SHOW",
+            "TRIP_STARTED",
+            "TRIP_COMPLETED",
+            "CANCELLED"
+        ],
+        default: "SEARCHING"
+    },
+
+    driverArrivedAt: {
+        type: Date,
+        default: null
     },
 
 }, 

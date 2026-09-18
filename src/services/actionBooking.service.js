@@ -6,6 +6,14 @@ const Customer = require("../models/Customer");
 const pricing = require("../utils/pricing");
 const otpService = require("./otp.service");
 const razorpay = require("./razorpay.service");
+const flowMachine = require("../utils/bookingStateMachine");
+const { applyFlowStatus, resolveFlowStatus } = flowMachine;
+const bookingTime = require("../utils/bookingTime");
+const { timeToMinutes, windowsOverlap, sameDay, dayRangesOverlap, bookingDays, hasConflictingBooking, isDriverFree } = bookingTime;
+const reassignment = require("./reassignment.service");
+const cancellationPolicy = require("../utils/cancellationPolicy");
+const driverPolicy = require("../utils/driverPolicy");
+const logger = require("../utils/logger");
 
 const generateBookingNumber = () => {
     const now = new Date();
@@ -14,86 +22,6 @@ const generateBookingNumber = () => {
     const day = String(now.getDate()).padStart(2, "0");
     const random = Math.floor(1000 + Math.random() * 9000);
     return `BK${year}${month}${day}${random}`;
-};
-
-// Normalize a time window to comparable minutes.
-const timeToMinutes = (t) => {
-    if (!t) return null;
-    const s = String(t).trim().toUpperCase();
-    const isPM = s.includes("PM");
-    const isAM = s.includes("AM");
-    const nums = s.replace(/\s*(AM|PM)\s*/i, "").split(":").map(Number);
-    let h = nums[0] || 0;
-    const m = nums[1] || 0;
-    if (isNaN(h)) return null;
-    if (isPM && h < 12) h += 12;
-    if (isAM && h === 12) h = 0;
-    return h * 60 + m;
-};
-
-// Check whether two time windows overlap (across a single booking day).
-const windowsOverlap = (aStart, aEnd, bStart, bEnd) => {
-    const a1 = timeToMinutes(aStart);
-    const a2 = timeToMinutes(aEnd);
-    const b1 = timeToMinutes(bStart);
-    const b2 = timeToMinutes(bEnd);
-    if (a1 == null || a2 == null || b1 == null || b2 == null) return false;
-
-    let aA = a1, aB = a2;
-    if (aB <= aA) aB += 24 * 60;
-    let bA = b1, bB = b2;
-    if (bB <= bA) bB += 24 * 60;
-
-    return aA < bB && bA < aB;
-};
-
-// Are two calendar dates the same day? (ignores time-of-day)
-const sameDay = (d1, d2) => {
-    if (!d1 || !d2) return false;
-    const a = new Date(d1);
-    const b = new Date(d2);
-    return a.getFullYear() === b.getFullYear() &&
-        a.getMonth() === b.getMonth() &&
-        a.getDate() === b.getDate();
-};
-
-// Do the booking's days overlap the driver's busy day range?
-const dayRangesOverlap = (reqFrom, reqTo, busyFrom, busyTo) => {
-    const rf = reqFrom ? new Date(reqFrom).getTime() : -Infinity;
-    const rt = reqTo ? new Date(reqTo).getTime() : Infinity;
-    const bf = busyFrom ? new Date(busyFrom).getTime() : -Infinity;
-    const bt = busyTo ? new Date(busyTo).getTime() : Infinity;
-    return rf <= bt && bf <= rt;
-};
-
-// How many days does this booking span (inclusive)?
-const bookingDays = (fromDate, toDate) => {
-    if (!fromDate || !toDate) return 1;
-    const diff = Math.round((new Date(toDate) - new Date(fromDate)) / (1000 * 60 * 60 * 24)) + 1;
-    return diff > 0 ? diff : 1;
-};
-
-/**
- * Determine whether a driver is free for the requested date/time window.
- * A driver is busy if they have a CONFIRMED/ONGOING acting-driver booking
- * (or any overlapping active booking) whose window conflicts.
- */
-const isDriverFree = async (driverId, fromDate, toDate, startTime, endTime) => {
-    const conflicts = await Booking.find({
-        assignedDriverId: driverId,
-        bookingStatus: { $in: ["CONFIRMED", "ONGOING"] },
-        fromDate: { $ne: null }
-    }).select("fromDate toDate startTime endTime bookingStatus");
-
-    for (const b of conflicts) {
-        // Date ranges must overlap AND time windows must overlap.
-        if (dayRangesOverlap(fromDate, toDate, b.fromDate, b.toDate)) {
-            if (windowsOverlap(startTime, endTime, b.startTime, b.endTime)) {
-                return false;
-            }
-        }
-    }
-    return true;
 };
 
 /**
@@ -186,6 +114,12 @@ exports.createBooking = async (customerId, data) => {
         estimatedFare: amount,
         estimatedDuration: hours,
         bookingStatus: "PENDING",
+        flowStatus: "DRIVER_SEARCHING",
+        driverAssignmentStatus: "SEARCHING",
+        flowStatusHistory: [
+            { status: "BOOKING_CREATED", at: new Date(), by: "customer" },
+            { status: "DRIVER_SEARCHING", at: new Date(), by: "system" }
+        ],
         tripType: "Local"
     });
 
@@ -284,7 +218,8 @@ exports.acceptRequest = async (driverId, requestId) => {
 
     // Confirm the main booking and assign the driver atomically:
     // only succeeds if the booking is still PENDING (prevents double win).
-    const booking = await Booking.findOneAndUpdate(
+    // If it is CONFIRMED + DRIVER_REASSIGNING, this is a replacement offer accept.
+    let booking = await Booking.findOneAndUpdate(
         {
             _id: claimed.bookingId,
             bookingStatus: "PENDING"
@@ -293,10 +228,36 @@ exports.acceptRequest = async (driverId, requestId) => {
             bookingStatus: "CONFIRMED",
             assignedDriverId: driverId,
             driverId,
-            acceptedAt: new Date()
+            acceptedAt: new Date(),
+            flowStatus: "DRIVER_ASSIGNED",
+            driverAssignmentStatus: "ASSIGNED"
         },
         { returnDocument: "after" }
     );
+
+    if (!booking) {
+        // Replacement round: accept a reassignment offer (booking stays CONFIRMED).
+        booking = await Booking.findOneAndUpdate(
+            {
+                _id: claimed.bookingId,
+                bookingStatus: "CONFIRMED",
+                flowStatus: "DRIVER_REASSIGNING"
+            },
+            {
+                $set: {
+                    assignedDriverId: driverId,
+                    driverId,
+                    acceptedAt: new Date(),
+                    flowStatus: "DRIVER_REASSIGNED",
+                    driverAssignmentStatus: "REASSIGNED"
+                },
+                $push: {
+                    flowStatusHistory: { status: "DRIVER_REASSIGNED", at: new Date(), by: "driver" }
+                }
+            },
+            { returnDocument: "after" }
+        );
+    }
 
     if (!booking) {
         // Booking already confirmed by someone else - roll back our claim.
@@ -306,6 +267,65 @@ exports.acceptRequest = async (driverId, requestId) => {
         });
         throw new Error("This booking has already been accepted by another driver.");
     }
+
+    // Availability is time-window based. Re-validate after the atomic claim
+    // so a concurrent accept of the same window by the same driver is
+    // detected and rolled back instead of double-booking.
+    const now = new Date();
+    const wasReassign = booking.flowStatus === "DRIVER_REASSIGNED";
+    booking.flowStatusHistory = booking.flowStatusHistory || [];
+    if (!wasReassign) {
+        booking.flowStatusHistory.push({ status: "DRIVER_ASSIGNED", at: now, by: "driver" });
+    } else {
+        // Replacement driver accepted: close out the reassignment state.
+        booking.unavailabilityReason = "";
+        booking.unavailabilityDescription = "";
+        booking.replacementSearchStartedAt = null;
+        booking.reassignmentDeadline = null;
+    }
+    applyFlowStatus(booking, "DRIVER_CONFIRMED", "driver");
+    booking.driverAssignmentStatus = "CONFIRMED";
+    if (wasReassign) {
+        await reassignment.recordHistory({
+            bookingId: booking._id,
+            driverId,
+            status: "ASSIGNED",
+            requestId: claimed._id,
+            reason: "replacement_accept",
+            by: "driver"
+        });
+    }
+
+    const conflict = await hasConflictingBooking(
+        driverId,
+        booking.fromDate,
+        booking.toDate,
+        booking.startTime,
+        booking.endTime,
+        booking._id
+    );
+
+    if (conflict) {
+        await Booking.updateOne(
+            { _id: booking._id, bookingStatus: "CONFIRMED", assignedDriverId: driverId },
+            {
+                bookingStatus: "PENDING",
+                assignedDriverId: null,
+                driverId: null,
+                acceptedAt: null,
+                flowStatus: "DRIVER_SEARCHING",
+                driverAssignmentStatus: "SEARCHING"
+            }
+        );
+        await BookingDriverRequest.updateOne(
+            { _id: claimed._id },
+            { $set: { requestStatus: "PENDING", acceptedAt: null } }
+        );
+        await Driver.findByIdAndUpdate(driverId, { currentBookingId: null });
+        throw new Error("You already have a conflicting booking at this time.");
+    }
+
+    await booking.save();
 
     // Close all other PENDING requests for this booking.
     await BookingDriverRequest.updateMany(
@@ -319,10 +339,10 @@ exports.acceptRequest = async (driverId, requestId) => {
         }
     );
 
-    // Update driver availability to busy.
+    // The driver stays Online & available. Busy is enforced per time-window
+    // by hasConflictingBooking, so this driver remains visible to other
+    // customers for every non-overlapping slot on this or future days.
     await Driver.findByIdAndUpdate(driverId, {
-        accountStatus: "Busy",
-        isAvailable: false,
         currentBookingId: booking._id
     });
 
@@ -350,9 +370,12 @@ exports.rejectRequest = async (driverId, requestId, reason) => {
     });
     if (!request) throw new Error("Booking request not found");
 
-    if (request.requestStatus !== "PENDING") {
+if (request.requestStatus !== "PENDING") {
         throw new Error("Booking request already handled");
     }
+
+    // Strike policy: X skips/cancels allowed, the next one is restricted.
+    await driverPolicy.assertNotRestricted(driverId);
 
     request.requestStatus = "REJECTED";
     request.rejectionReason = reason || "Not available";
@@ -361,19 +384,53 @@ exports.rejectRequest = async (driverId, requestId, reason) => {
 
     // If all requests for this booking are no longer PENDING (all rejected/expired),
     // and the booking is still unconformed, mark it NO_DRIVER_AVAILABLE.
+    // During an active reassignment round, run the next search round instead.
     const remaining = await BookingDriverRequest.countDocuments({
         bookingId: request.bookingId,
         requestStatus: "PENDING"
     });
 
-    if (remaining === 0) {
-        await Booking.updateOne(
-            {
-                _id: request.bookingId,
-                bookingStatus: "PENDING"
-            },
-            { bookingStatus: "NO_DRIVER_AVAILABLE" }
-        );
+if (remaining === 0) {
+        const bookingDoc = await Booking.findById(request.bookingId);
+        const cfg = await pricing.getConfig();
+
+        if (bookingDoc && bookingDoc.flowStatus === "DRIVER_REASSIGNING") {
+            await reassignment.runReassignmentRound(bookingDoc, cfg, "system");
+        } else if (bookingDoc) {
+            // Initial recruiting phase exhausted: forward to the next eligible
+            // drivers that were never invited yet. Only fall back to
+            // NO_DRIVER_AVAILABLE when there are truly no fresh candidates.
+            const round = await reassignment.runInitialSearchRound(bookingDoc, cfg, "system");
+            if (round && round.offered && round.offered.length > 0) {
+                logger.logEvent("booking_forwarded_to_next_eligible", {
+                    bookingId: String(request.bookingId),
+                    newStatus: "DRIVER_SEARCHING",
+                    meta: { candidates: round.offered.map((o) => String(o.driverId)) }
+                });
+            } else {
+                await Booking.updateOne(
+                    {
+                        _id: request.bookingId,
+                        bookingStatus: "PENDING"
+                    },
+                    {
+                        bookingStatus: "NO_DRIVER_AVAILABLE",
+                        flowStatus: "SYSTEM_CANCELLED",
+                        driverAssignmentStatus: "CANCELLED",
+                        cancelledAt: new Date(),
+                        cancelledBy: "System",
+                        cancelReason: "No driver available",
+                        $push: {
+                            flowStatusHistory: {
+                                status: "SYSTEM_CANCELLED",
+                                at: new Date(),
+                                by: "system"
+                            }
+                        }
+                    }
+                );
+            }
+        }
     }
 
     return {
@@ -488,6 +545,11 @@ exports.getCustomerUpcoming = async (customerId) => {
         pickupAddress: b.pickupAddress,
         dropAddress: b.dropAddress,
         amount: b.estimatedFare,
+        flowStatus: b.flowStatus,
+        driverAssignmentStatus: b.driverAssignmentStatus,
+        amountDue: b.amountDue || 0,
+        cancellationFee: b.cancellationFee || 0,
+        noShowFee: b.noShowFee || 0,
         driver: b.assignedDriverId
             ? {
                   driverId: b.assignedDriverId._id,
@@ -532,7 +594,17 @@ exports.getCustomerBookingById = async (customerId, bookingId) => {
             amount: booking.estimatedFare,
             durationHours: booking.estimatedDuration,
             paymentStatus: booking.paymentStatus,
+            amountDue: booking.amountDue || 0,
+            cancellationFee: booking.cancellationFee || 0,
+            noShowFee: booking.noShowFee || 0,
+            unavailabilityReason: booking.unavailabilityReason || "",
+            unavailabilityDescription: booking.unavailabilityDescription || "",
+            noShowWindowEndsAt: booking.noShowWindowEndsAt || null,
+            reassignmentDeadline: booking.reassignmentDeadline || null,
+            replacementSearchStartedAt: booking.replacementSearchStartedAt || null,
             tripStartedAt: booking.tripStartedAt,
+            flowStatus: booking.flowStatus,
+            driverAssignmentStatus: booking.driverAssignmentStatus,
             startedAt: booking.startedAt,
             completedAt: booking.completedAt,
             actualHours: booking.actualHours,
@@ -583,6 +655,8 @@ exports.getDriverUpcoming = async (driverId) => {
         pickupAddress: b.pickupAddress,
         dropAddress: b.dropAddress,
         amount: b.estimatedFare,
+        flowStatus: b.flowStatus,
+        driverAssignmentStatus: b.driverAssignmentStatus,
         startedAt: b.startedAt,
         customer: b.customerId
             ? {
@@ -632,23 +706,32 @@ exports.driverStartTrip = async ({ driverId, bookingId, enteredOtp }) => {
         purpose: "start",
         onVerify: async (booking) => {
             const fromDate = booking.fromDate;
-            if (!fromDate) {
-                throw new Error("Booking has no start date");
-            }
-
-            const today = new Date();
-            const same = sameDay(fromDate, today);
-            if (!same) {
-                throw new Error(
-                    "Trip can only start on the scheduled date (" +
-                    new Date(fromDate).toDateString() +
-                    ")"
-                );
+            if (fromDate) {
+                const today = new Date();
+                const same = sameDay(fromDate, today);
+                if (!same) {
+                    throw new Error(
+                        "Trip can only start on the scheduled date (" +
+                        new Date(fromDate).toDateString() +
+                        ")"
+                    );
+                }
             }
 
             booking.bookingStatus = "ONGOING";
             booking.startOtpVerified = true;
             booking.startedAt = new Date();
+            try {
+                applyFlowStatus(booking, "DRIVER_ARRIVED", "driver");
+            } catch (e) {
+                // Arrival is expected whenever the driver used the arrival flow.
+            }
+            applyFlowStatus(booking, "TRIP_STARTED", "driver");
+            booking.driverAssignmentStatus = "TRIP_STARTED";
+            if (!booking.driverArrivedAt) {
+                booking.driverArrivedAt = new Date();
+            }
+            booking.noShowWindowEndsAt = null;
         }
     });
 };
@@ -662,7 +745,7 @@ exports.driverStartTrip = async ({ driverId, bookingId, enteredOtp }) => {
 exports.driverEndTrip = async ({ driverId, bookingId, enteredOtp }) => {
     const booking = await Booking.findOne({
         _id: bookingId,
-        assignedDriverId: driverId,
+        $or: [{ assignedDriverId: driverId }, { driverId }],
         bookingStatus: "ONGOING"
     });
     if (!booking) {
@@ -690,6 +773,8 @@ exports.driverEndTrip = async ({ driverId, bookingId, enteredOtp }) => {
             b.bookingStatus = "Completed";
             b.endOtpVerified = true;
             b.completedAt = new Date();
+            applyFlowStatus(b, "TRIP_COMPLETED", "driver");
+            applyFlowStatus(b, "FARE_CALCULATED", "system");
 
             b.actualHours = fare.billableHours;
             b.actualFare = fare.total;
@@ -864,10 +949,12 @@ exports.getTripFare = async ({ customerId, bookingId }) => {
         booking: {
             id: booking._id,
             bookingNumber: booking.bookingNumber,
-            status: booking.bookingStatus,
-            paymentStatus: booking.paymentStatus,
-            actualHours: booking.actualHours,
-            fareBreakup: booking.fareBreakup || {},
+status: booking.bookingStatus,
+        flowStatus: booking.flowStatus,
+        driverAssignmentStatus: booking.driverAssignmentStatus,
+        paymentStatus: booking.paymentStatus,
+        actualHours: booking.actualHours,
+        fareBreakup: booking.fareBreakup || {},
             actualFare: booking.actualFare,
             estimatedFare: booking.estimatedFare,
             startedAt: booking.startedAt,
@@ -924,14 +1011,21 @@ exports.getCustomerBookings = async (customerId, status) => {
             dropAddress: b.dropAddress,
             amount: b.estimatedFare,
             durationHours: b.estimatedDuration,
+            flowStatus: b.flowStatus,
+            driverAssignmentStatus: b.driverAssignmentStatus,
             bookingCreatedAt: b.createdAt,
             tripType: b.tripType,
             paymentStatus: b.paymentStatus,
             acceptedAt: b.acceptedAt,
             completedAt: b.completedAt,
-            cancelledAt: b.cancelledAt,
+cancelledAt: b.cancelledAt,
             cancelledBy: b.cancelledBy,
             cancelReason: b.cancelReason,
+            unavailabilityReason: b.unavailabilityReason || "",
+            unavailabilityDescription: b.unavailabilityDescription || "",
+            amountDue: b.amountDue || 0,
+            cancellationFee: b.cancellationFee || 0,
+            noShowFee: b.noShowFee || 0,
             driver: b.assignedDriverId
                 ? {
                       driverId: b.assignedDriverId._id,
@@ -955,7 +1049,9 @@ exports.getCustomerBookings = async (customerId, status) => {
 };
 
 /**
- * Customer cancels a confirmed/pending booking with a reason.
+ * Customer cancels a booking with a reason. Backend-computes the cancellation
+ * fee (Pay After Service => amount due, never a refund/refund amount). Atomic
+ * single-winner claim: exactly one cancel / reassign transition can land.
  */
 exports.cancelBooking = async (customerId, bookingId, reason) => {
     const booking = await Booking.findOne({
@@ -964,17 +1060,53 @@ exports.cancelBooking = async (customerId, bookingId, reason) => {
     });
     if (!booking) throw new Error("Booking not found");
 
-    if (!["PENDING", "CONFIRMED", "ONGOING", "NO_DRIVER_AVAILABLE"].includes(booking.bookingStatus)) {
+    if (booking.bookingStatus === "ONGOING") {
+        const err = new Error("Trip has already started and cannot be cancelled.");
+        err.code = "CANCELLATION_NOT_ALLOWED";
+        throw err;
+    }
+
+    if (!["PENDING", "CONFIRMED", "NO_DRIVER_AVAILABLE"].includes(booking.bookingStatus)) {
         throw new Error("Booking cannot be cancelled in its current state");
     }
 
-    const wasConfirmed = ["CONFIRMED", "ONGOING"].includes(booking.bookingStatus);
+    const cfg = await pricing.getConfig();
+    const { cancellationFee, driverArrived } = await cancellationPolicy.computeCancellationFee(booking, cfg);
+    const amountDue = cancellationFee || 0;
+    const wasConfirmed = ["CONFIRMED"].includes(booking.bookingStatus);
+    const beforeStatus = booking.flowStatus || booking.bookingStatus;
+    const hadDriver = booking.assignedDriverId || booking.driverId || null;
+    const now = new Date();
 
-    booking.bookingStatus = "CANCELLED";
-    booking.cancelledBy = "Customer";
-    booking.cancelReason = reason || "Cancelled by customer";
-    booking.cancelledAt = new Date();
-    await booking.save();
+    const claim = await Booking.findOneAndUpdate(
+        {
+            _id: booking._id,
+            customerId,
+            bookingStatus: { $in: ["PENDING", "CONFIRMED", "NO_DRIVER_AVAILABLE"] }
+        },
+        {
+            $set: {
+                bookingStatus: "CANCELLED",
+                flowStatus: "CUSTOMER_CANCELLED",
+                driverAssignmentStatus: hadDriver ? "CANCELLED" : booking.driverAssignmentStatus,
+                cancelledBy: "Customer",
+                cancelReason: reason || "Cancelled by customer",
+                cancelledAt: now,
+                amountDue,
+                cancellationFee,
+                noShowWindowEndsAt: null,
+                replacementSearchStartedAt: null,
+                reassignmentDeadline: null
+            },
+            $push: {
+                flowStatusHistory: { status: "CUSTOMER_CANCELLED", at: now, by: "customer" }
+            }
+        },
+        { returnDocument: "after" }
+    );
+    if (!claim) {
+        throw new Error("Booking was already cancelled or modified.");
+    }
 
     // Close any still-pending driver requests for this booking.
     await BookingDriverRequest.updateMany(
@@ -982,49 +1114,374 @@ exports.cancelBooking = async (customerId, bookingId, reason) => {
         { requestStatus: "CANCELLED" }
     );
 
-    // If a driver was already assigned, free them so they can take other trips.
-    const assignedDriverId = booking.assignedDriverId || booking.driverId;
-    if (wasConfirmed && assignedDriverId) {
-        await Driver.findByIdAndUpdate(assignedDriverId, {
+    // If a driver was already confirmed, free them so they can take other trips.
+    if (wasConfirmed && hadDriver) {
+        await Driver.findByIdAndUpdate(hadDriver, {
             accountStatus: "Online",
             isAvailable: true,
             currentBookingId: null
         });
     }
 
-    return { success: true, message: "Booking cancelled successfully." };
+    // One immutable cancellation record (customer cancels once per booking).
+    await reassignment.createCancellationRecord({
+        booking: claim,
+        driverId: hadDriver,
+        cancelledBy: "CUSTOMER",
+        reason: reason || "cancelled by customer",
+        driverArrived,
+        cancellationFee,
+        amountDue
+    });
+
+    logger.logEvent("customer_cancelled", {
+        bookingId: claim._id,
+        driverId: hadDriver,
+        oldStatus: beforeStatus,
+        newStatus: "CUSTOMER_CANCELLED",
+        reason: reason || "",
+        meta: { cancellationFee, amountDue }
+    });
+
+    return {
+        success: true,
+        message: "Booking cancelled successfully.",
+        refundAmount: 0,
+        cancellationFee,
+        amountDue,
+        paymentStatus: amountDue > 0 ? "Pending" : claim.paymentStatus
+    };
 };
 
 /**
- * Driver cancels a confirmed booking with a reason.
+ * Customer: preview the cancellation fee WITHOUT cancelling (decision support).
  */
-exports.driverCancelBooking = async (driverId, bookingId, reason) => {
-    const booking = await Booking.findOne({
-        _id: bookingId,
-        assignedDriverId: driverId
-    });
+exports.previewCancellation = async (customerId, bookingId) => {
+    const booking = await Booking.findOne({ _id: bookingId, customerId });
     if (!booking) throw new Error("Booking not found");
-    if (!["CONFIRMED", "ONGOING"].includes(booking.bookingStatus)) {
+
+    if (booking.bookingStatus === "ONGOING") {
+        const err = new Error("Trip has already started and cannot be cancelled.");
+        err.code = "CANCELLATION_NOT_ALLOWED";
+        throw err;
+    }
+    if (!["PENDING", "CONFIRMED", "NO_DRIVER_AVAILABLE"].includes(booking.bookingStatus)) {
         throw new Error("Booking cannot be cancelled in its current state");
     }
 
-    booking.bookingStatus = "CANCELLED";
-    booking.cancelledBy = "Driver";
-    booking.cancelReason = reason || "Cancelled by driver";
-    booking.cancelledAt = new Date();
-    booking.assignedDriverId = null;
-    await booking.save();
+    const cfg = await pricing.getConfig();
+    const { cancellationFee, driverArrived } = await cancellationPolicy.computeCancellationFee(booking, cfg);
 
-    // Free up the driver.
+    return {
+        success: true,
+        cancelling: true,
+        refundAmount: 0,
+        cancellationFee,
+        amountDue: cancellationFee,
+        driverArrived,
+        estimatedFare: booking.estimatedFare || 0,
+        paymentStatus: cancellationFee > 0 ? "Pending" : booking.paymentStatus
+    };
+};
+
+/**
+ * Driver reports they can no longer complete the booking. This NEVER hard-cancels:
+ * it marks the driver UNAVAILABLE, frees them, then runs the reassignment engine
+ * (find -> offer -> accept, or -> SYSTEM_CANCELLED if no replacement / deadline).
+ */
+exports.driverUnavailable = async (driverId, bookingId, { reason = "", description = "" } = {}) => {
+    if (reason && !reassignment.UNAVAILABILITY_REASONS.includes(reason)) {
+        throw new Error("Invalid driver unavailability reason");
+    }
+    return reassignment.triggerReassignment({
+        bookingId,
+        driverId,
+        reason,
+        description,
+        by: "driver"
+    });
+};
+
+// Backwards-compatible alias: the old /drivers/bookings/:id/cancel route.
+exports.driverCancelBooking = async (driverId, bookingId, reason = "") => {
+    const found = await Booking.findById(bookingId);
+    if (!found) throw new Error("Booking not found");
+
+    const assigned =
+        (found.assignedDriverId && found.assignedDriverId._id)
+            ? String(found.assignedDriverId._id)
+            : String(found.assignedDriverId || found.driverId || "");
+    if (assigned !== String(driverId)) {
+        throw new Error("This driver is not assigned to this booking");
+    }
+
+    if (found.bookingStatus === "ONGOING") {
+        const err = new Error("Trip has already started and cannot be cancelled.");
+        err.code = "CANCELLATION_NOT_ALLOWED";
+        throw err;
+    }
+
+    // Strike policy: X cancels/skips allowed, the next one is restricted.
+    await driverPolicy.assertNotRestricted(driverId);
+
+    // Acting-driver flow: a driver cancel on a confirmed trip must NEVER
+    // hard-cancel the customer's booking. Route it through the reassignment
+    // engine so a replacement is searched and the booking survives; it is only
+    // system-cancelled as a last-resort fallback when no replacement can be
+    // found before the deadline (see failReplacement).
+    if (reassignment.REASSIGNABLE_STATUSES.includes(found.flowStatus)) {
+        const mapped = reassignment.UNAVAILABILITY_REASONS.includes(reason)
+            ? reason
+            : "DRIVER_OTHER";
+        const description =
+            reason && !reassignment.UNAVAILABILITY_REASONS.includes(reason)
+                ? `Driver cancelled: ${reason}`
+                : "";
+        const result = await reassignment.triggerReassignment({
+            bookingId,
+            driverId,
+            reason: mapped,
+            description,
+            by: "driver"
+        });
+        // Ledger the driver strike (the search itself may still save the trip).
+        await reassignment.createCancellationRecord({
+            booking: found,
+            driverId,
+            cancelledBy: "DRIVER",
+            reason: reason || "cancelled by driver",
+            driverArrived: found.flowStatus === "DRIVER_ARRIVED",
+            cancellationFee: 0,
+            amountDue: 0
+        });
+        logger.logEvent("driver_cancelled_to_reassign", {
+            bookingId: String(bookingId),
+            driverId: String(driverId),
+            oldStatus: found.flowStatus || found.bookingStatus,
+            newStatus: "DRIVER_REASSIGNING",
+            reason: reason || ""
+        });
+        return {
+            success: true,
+            message: "Trip cancel accepted — a replacement driver will be assigned to the customer.",
+            reassigning: true,
+            ...result
+        };
+    }
+
+    if (!["PENDING", "CONFIRMED", "NO_DRIVER_AVAILABLE"].includes(found.bookingStatus)) {
+        throw new Error("Booking cannot be cancelled in its current state");
+    }
+
+    const now = new Date();
+    const claim = await Booking.findOneAndUpdate(
+        {
+            _id: bookingId,
+            bookingStatus: { $in: ["PENDING", "CONFIRMED", "NO_DRIVER_AVAILABLE"] },
+            $or: [{ assignedDriverId: driverId }, { driverId }]
+        },
+        {
+            $set: {
+                bookingStatus: "CANCELLED",
+                flowStatus: "DRIVER_CANCELLED",
+                driverAssignmentStatus: "CANCELLED",
+                cancelledBy: "Driver",
+                cancelReason: reason || "Cancelled by driver",
+                cancelledAt: now,
+                amountDue: 0,
+                cancellationFee: 0,
+                noShowWindowEndsAt: null,
+                replacementSearchStartedAt: null,
+                reassignmentDeadline: null
+            },
+            $push: {
+                flowStatusHistory: { status: "DRIVER_CANCELLED", at: now, by: "driver" }
+            }
+        },
+        { returnDocument: "after" }
+    );
+
+    if (!claim) {
+        throw new Error("Booking was already cancelled or modified.");
+    }
+
+    // Close any still-pending driver requests for this booking.
+    await BookingDriverRequest.updateMany(
+        { bookingId: bookingId, requestStatus: "PENDING" },
+        { requestStatus: "CANCELLED" }
+    );
+
+    // Free the driver so they can take other trips.
     await Driver.findByIdAndUpdate(driverId, {
         accountStatus: "Online",
         isAvailable: true,
         currentBookingId: null
     });
 
-    return { success: true, message: "Booking cancelled successfully." };
+    // One immutable cancellation record (driver cancels once per booking).
+    await reassignment.createCancellationRecord({
+        booking: claim,
+        driverId,
+        cancelledBy: "DRIVER",
+        reason: reason || "cancelled by driver",
+        driverArrived: false,
+        cancellationFee: 0,
+        amountDue: 0
+    });
+
+    logger.logEvent("driver_cancelled", {
+        bookingId: claim._id,
+        driverId,
+        oldStatus: found.flowStatus || found.bookingStatus,
+        newStatus: "DRIVER_CANCELLED",
+        reason: reason || ""
+    });
+
+    return {
+        success: true,
+        message: "Booking cancelled successfully.",
+        booking: {
+            id: claim._id,
+            bookingNumber: claim.bookingNumber,
+            status: "CANCELLED",
+            cancelledBy: "Driver",
+            cancelReason: claim.cancelReason,
+            cancelledAt: claim.cancelledAt
+        }
+    };
+};
+
+/**
+ * Driver: complete trip history for the Trips screen — every booking this
+ * driver was ever assigned (scheduled, running, completed, cancelled) with all
+ * detail fields, so cancelled/completed trips stay visible for future use.
+ */
+exports.getDriverHistory = async (driverId) => {
+    const bookings = await Booking.find({
+        $or: [{ assignedDriverId: driverId }, { driverId }],
+        bookingStatus: { $nin: ["PENDING", "Searching", "Assigned", "NO_DRIVER_AVAILABLE", "EXPIRED", "Searching"] }
+    })
+        .populate("customerId", "name phone email profileImage fullName")
+        .sort({ createdAt: -1 });
+
+    const result = bookings.map((b) => ({
+        id: b._id,
+        bookingNumber: b.bookingNumber,
+        status: b.bookingStatus,
+        flowStatus: b.flowStatus,
+        driverAssignmentStatus: b.driverAssignmentStatus,
+        fromDate: b.fromDate,
+        toDate: b.toDate,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        pickupAddress: b.pickupAddress,
+        dropAddress: b.dropAddress,
+        amount: b.estimatedFare,
+        tripType: b.tripType,
+        acceptedAt: b.acceptedAt,
+        startedAt: b.startedAt,
+        completedAt: b.completedAt,
+        cancelledAt: b.cancelledAt,
+        cancelledBy: b.cancelledBy,
+        cancelReason: b.cancelReason,
+        actualFare: b.actualFare,
+        actualHours: b.actualHours,
+        driverEarning: b.driverEarning,
+        createdBookingAt: b.createdAt,
+        customer: b.customerId
+            ? {
+                name: b.customerId.name || b.customerId.fullName || "Customer",
+                phone: b.customerId.phone || "",
+                profileImage: b.customerId.profileImage || ""
+            }
+            : null
+    }));
+
+    return { success: true, count: result.length, bookings: result };
+};
+
+/**
+ * Driver: mark the booking as "heading to pickup".
+ */
+exports.driverMarkEnRoute = async (driverId, bookingId) => {
+    const updated = await Booking.findOneAndUpdate(
+        {
+            _id: bookingId,
+            assignedDriverId: driverId,
+            bookingStatus: "CONFIRMED",
+            flowStatus: { $in: ["DRIVER_CONFIRMED", "DRIVER_REASSIGNED"] }
+        },
+        {
+            $set: { flowStatus: "DRIVER_EN_ROUTE", driverAssignmentStatus: "EN_ROUTE" },
+            $push: { flowStatusHistory: { status: "DRIVER_EN_ROUTE", at: new Date(), by: "driver" } }
+        },
+        { returnDocument: "after" }
+    );
+    if (!updated) {
+        const err = new Error("Booking is not ready for the driver to head to pickup");
+        err.code = "INVALID_STATE";
+        throw err;
+    }
+
+    await reassignment.recordHistory({
+        bookingId: updated._id,
+        driverId,
+        status: "EN_ROUTE",
+        reason: "driver heading to pickup",
+        by: "driver"
+    });
+
+    return { success: true, message: "Driver en route.", flowStatus: "DRIVER_EN_ROUTE" };
+};
+
+/**
+ * Driver: mark arrival at pickup. Starts the customer no-show window so an
+ * unattended pickup is auto-processed (NO_SHOW + fee) after noShowWaitMinutes.
+ */
+exports.driverMarkArrived = async (driverId, bookingId) => {
+    const cfg = await pricing.getConfig();
+    const now = new Date();
+    const noShowWindowEndsAt = new Date(now.getTime() + ((cfg.noShowWaitMinutes || 15) * 60000));
+
+    const updated = await Booking.findOneAndUpdate(
+        {
+            _id: bookingId,
+            assignedDriverId: driverId,
+            bookingStatus: "CONFIRMED",
+            flowStatus: { $in: ["DRIVER_CONFIRMED", "DRIVER_EN_ROUTE", "DRIVER_REASSIGNED"] }
+        },
+        {
+            $set: {
+                flowStatus: "DRIVER_ARRIVED",
+                driverAssignmentStatus: "ARRIVED",
+                driverArrivedAt: now,
+                noShowWindowEndsAt
+            },
+            $push: { flowStatusHistory: { status: "DRIVER_ARRIVED", at: now, by: "driver" } }
+        },
+        { returnDocument: "after" }
+    );
+    if (!updated) {
+        throw new Error("Booking is not in a state where the driver can arrive");
+    }
+
+    await reassignment.recordHistory({
+        bookingId: updated._id,
+        driverId,
+        status: "ARRIVED",
+        reason: "driver arrived at pickup",
+        by: "driver"
+    });
+
+    return {
+        success: true,
+        message: "Driver arrived at pickup.",
+        flowStatus: "DRIVER_ARRIVED",
+        noShowWindowEndsAt: updated.noShowWindowEndsAt
+    };
 };
 
 // Expose helper for reuse
 exports.isDriverFree = isDriverFree;
 exports.bookingDays = bookingDays;
+

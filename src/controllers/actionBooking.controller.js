@@ -69,7 +69,30 @@ exports.cancelBooking = async (req, res) => {
         );
         res.json(result);
     } catch (error) {
-        res.status(400).json({ success: false, message: error.message });
+        const status = error.code === "CANCELLATION_NOT_ALLOWED" ? 400 : 400;
+        res.status(status).json({
+            success: false,
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
+        });
+    }
+};
+
+// Customer: preview the cancellation fee WITHOUT cancelling.
+exports.previewCancellation = async (req, res) => {
+    try {
+        const result = await actionBookingService.previewCancellation(
+            req.customer.customerId,
+            req.params.id
+        );
+        res.json(result);
+    } catch (error) {
+        const status = error.code === "CANCELLATION_NOT_ALLOWED" ? 400 : 400;
+        res.status(status).json({
+            success: false,
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
+        });
     }
 };
 
@@ -121,7 +144,11 @@ exports.rejectRequest = async (req, res) => {
         );
         res.json(result);
     } catch (error) {
-        res.status(400).json({ success: false, message: error.message });
+        res.status(400).json({
+            success: false,
+            message: error.message,
+            ...(error.code ? { code: error.code } : {})
+        });
     }
 };
 
@@ -136,12 +163,66 @@ exports.getDriverUpcoming = async (req, res) => {
     }
 };
 
+exports.getDriverHistory = async (req, res) => {
+    try {
+        const result = await actionBookingService.getDriverHistory(
+            req.driver.driverId
+        );
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 exports.driverCancelBooking = async (req, res) => {
     try {
         const result = await actionBookingService.driverCancelBooking(
             req.driver.driverId,
             req.params.id,
             req.body.reason
+        );
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+// Driver: report they can no longer complete the booking (reassignment flow).
+exports.driverUnavailable = async (req, res) => {
+    try {
+        const result = await actionBookingService.driverUnavailable(
+            req.driver.driverId,
+            req.params.id,
+            {
+                reason: req.body.reason,
+                description: req.body.description
+            }
+        );
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+// Driver: mark the booking "driving to pickup".
+exports.driverMarkEnRoute = async (req, res) => {
+    try {
+        const result = await actionBookingService.driverMarkEnRoute(
+            req.driver.driverId,
+            req.params.id
+        );
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+// Driver: mark arrival at pickup (starts the customer no-show window).
+exports.driverMarkArrived = async (req, res) => {
+    try {
+        const result = await actionBookingService.driverMarkArrived(
+            req.driver.driverId,
+            req.params.id
         );
         res.json(result);
     } catch (error) {

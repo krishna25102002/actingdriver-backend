@@ -57,14 +57,15 @@ exports.generateOtp = async ({ bookingId, driverId, customerId } = {}) => {
     }
 
     const purpose = getPurposeForBooking(booking);
+    const STARTABLE_STATUSES = ["CONFIRMED", "Accepted", "Assigned", "Reached Pickup"];
     const validStatus = purpose === "start"
-        ? booking.bookingStatus === "CONFIRMED"
+        ? STARTABLE_STATUSES.includes(booking.bookingStatus)
         : booking.bookingStatus === "ONGOING";
 
     if (!validStatus) {
         throw new Error(
             purpose === "start"
-                ? "Booking must be CONFIRMED to generate a start OTP"
+                ? "Booking must be accepted/confirmed to generate a start OTP"
                 : "Trip must be started to generate an end OTP"
         );
     }
@@ -120,7 +121,7 @@ exports.verifyOtp = async ({ bookingId, driverId, enteredOtp, purpose, onVerify 
 
     const booking = await Booking.findOne({
         _id: bookingId,
-        assignedDriverId: driverId
+        $or: [{ assignedDriverId: driverId }, { driverId }]
     });
 
     if (!booking) {
@@ -133,11 +134,12 @@ exports.verifyOtp = async ({ bookingId, driverId, enteredOtp, purpose, onVerify 
         ? { code: booking.startOtp, exp: booking.startOtpExpiresAt, verified: booking.startOtpVerified }
         : { code: booking.endOtp, exp: booking.endOtpExpiresAt, verified: booking.endOtpVerified };
 
-    const expectedStatus = currentPurpose === "start" ? "CONFIRMED" : "ONGOING";
-    if (booking.bookingStatus !== expectedStatus) {
+    const STARTABLE_STATUSES = ["CONFIRMED", "Accepted", "Assigned", "Reached Pickup"];
+    const expectedStatus = currentPurpose === "start" ? STARTABLE_STATUSES : ["ONGOING"];
+    if (!expectedStatus.includes(booking.bookingStatus)) {
         throw new Error(
             currentPurpose === "start"
-                ? "Booking must be CONFIRMED to start the trip"
+                ? "Booking must be accepted/confirmed to start the trip"
                 : "Trip must be ONGOING to end the trip"
         );
     }

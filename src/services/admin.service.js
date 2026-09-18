@@ -11,6 +11,7 @@ const OTP = require("../models/OTP");
 const CustomerVehicle = require("../models/CustomerVehicle");
 const CustomerDriverRequest = require("../models/CustomerDriverRequest");
 const BookingDriverRequest = require("../models/BookingDriverRequest");
+const reassignment = require("./reassignment.service");
 
 const startOfDay = () => {
     const d = new Date();
@@ -635,4 +636,23 @@ exports.deleteBooking = async (bookingId) => {
     if (!booking) throw new Error("Booking not found");
 
     return { success: true, message: "Booking deleted successfully" };
+};
+
+// ============================
+// Admin — cancellation & reassignment support
+// ============================
+
+exports.reassignBookingDriver = async (adminId, bookingId, data = {}) => {
+    return reassignment.adminReassign(adminId, bookingId, data);
+};
+
+exports.adminCancelBooking = async (adminId, bookingId, data = {}) => {
+    return reassignment.adminCancel(adminId, bookingId, data);
+};
+
+exports.adminMarkDriverNoShow = async (adminId, bookingId, data = {}) => {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) throw new Error("Booking not found");
+    if (!booking.assignedDriverId) throw new Error("No driver is assigned to this booking");
+    return reassignment.markDriverNoShow({ bookingId, driverId: booking.assignedDriverId });
 };
