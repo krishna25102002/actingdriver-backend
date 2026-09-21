@@ -6,7 +6,7 @@
     "_exporter_id": "39823923"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://192.168.0.9:5000", "type": "default" },
+    { "key": "baseUrl", "value": "http://192.168.0.7:5000", "type": "default" },
     { "key": "customerToken", "value": "", "type": "default" },
     { "key": "driverToken", "value": "", "type": "default" },
     { "key": "adminToken", "value": "", "type": "default" },

@@ -94,7 +94,7 @@ exports.cancelBooking = async (req, res) => {
         const result = await customerBookingService.cancelBooking(
             req.customer.customerId,
             req.params.id,
-            req.body.reason
+            req.body?.reason
         );
 
         res.json(result);

@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Booking = require("../models/Booking");
 const BookingDriverRequest = require("../models/BookingDriverRequest");
 const Driver = require("../models/Driver");
+const Rating = require("../models/Rating");
 const Customer = require("../models/Customer");
 const pricing = require("../utils/pricing");
 const otpService = require("./otp.service");
@@ -339,12 +340,15 @@ exports.acceptRequest = async (driverId, requestId) => {
         }
     );
 
-    // The driver stays Online & available. Busy is enforced per time-window
+// The driver stays Online & available. Busy is enforced per time-window
     // by hasConflictingBooking, so this driver remains visible to other
     // customers for every non-overlapping slot on this or future days.
     await Driver.findByIdAndUpdate(driverId, {
         currentBookingId: booking._id
     });
+
+    // Accepting a trip resets the driver's skip/cancel strike counter to 0.
+    await driverPolicy.resetStrikes(driverId);
 
     return {
         success: true,
@@ -455,7 +459,7 @@ exports.getPendingRequests = async (driverId) => {
         .populate("customerId", "name phone email profileImage")
         .sort({ requestedAt: -1 });
 
-    const result = requests.map((r) => ({
+const result = requests.map((r) => ({
         requestId: r._id,
         bookingId: r.bookingId,
         bookingNumber: r.bookingNumber,
@@ -479,7 +483,12 @@ exports.getPendingRequests = async (driverId) => {
         requestedAt: r.requestedAt
     }));
 
-    return { success: true, count: result.length, requests: result };
+    return {
+        success: true,
+        count: result.length,
+        requests: result,
+        strikePolicy: await driverPolicy.getStrikeSummary(driverId)
+    };
 };
 
 /**
@@ -575,9 +584,11 @@ exports.getCustomerBookingById = async (customerId, bookingId) => {
 
     if (!booking) throw new Error("Booking not found");
 
-    const requests = await BookingDriverRequest.find({ bookingId: booking._id })
+const requests = await BookingDriverRequest.find({ bookingId: booking._id })
         .populate("driverId", "fullName profilePhoto rating")
         .select("driverId requestStatus rejectionReason");
+
+    const existingRating = await Rating.findOne({ bookingId: booking._id });
 
     return {
         success: true,
@@ -613,8 +624,15 @@ exports.getCustomerBookingById = async (customerId, bookingId) => {
             driverEarning: booking.driverEarning,
             startOtpVerified: booking.startOtpVerified,
             startOtpExpiresAt: booking.startOtpExpiresAt,
-            endOtpVerified: booking.endOtpVerified,
+endOtpVerified: booking.endOtpVerified,
             endOtpExpiresAt: booking.endOtpExpiresAt,
+            rated: !!existingRating,
+            rating: existingRating
+                ? {
+                      stars: existingRating.stars,
+                      comment: existingRating.comment
+                  }
+                : null,
             driver: booking.assignedDriverId
                 ? {
                       driverId: booking.assignedDriverId._id,
@@ -788,10 +806,11 @@ exports.driverEndTrip = async ({ driverId, bookingId, enteredOtp }) => {
             b.fareBreakup.total = fare.total;
             b.fareBreakup.perHourRate = fare.perHourRate;
 
-            await Driver.findByIdAndUpdate(driverId, {
+await Driver.findByIdAndUpdate(driverId, {
                 accountStatus: "Online",
                 isAvailable: true,
-                currentBookingId: null
+                currentBookingId: null,
+                $inc: { totalTrips: 1 }
             });
 
             const result = {
@@ -979,11 +998,14 @@ exports.getCustomerBookings = async (customerId, status) => {
         .populate("assignedDriverId", "fullName profilePhoto rating mobileNumber")
         .sort({ createdAt: -1 });
 
-    const requestDocs = await BookingDriverRequest.find({
+const requestDocs = await BookingDriverRequest.find({
         bookingId: { $in: bookings.map((b) => b._id) }
     })
         .populate("driverId", "fullName profilePhoto rating")
         .select("bookingId driverId requestStatus rejectionReason");
+
+    const cfg = await pricing.getConfig();
+    const perHourRate = cfg.actingDriverPerHourRate || 210;
 
     const byBooking = {};
     requestDocs.forEach((r) => {
@@ -997,7 +1019,7 @@ exports.getCustomerBookings = async (customerId, status) => {
         });
     });
 
-    const result = bookings.map((b) => {
+const result = bookings.map((b) => {
         const requests = byBooking[b._id.toString()] || [];
         return {
             id: b._id,
@@ -1012,6 +1034,8 @@ exports.getCustomerBookings = async (customerId, status) => {
             amount: b.estimatedFare,
             durationHours: b.estimatedDuration,
             flowStatus: b.flowStatus,
+            startedAt: b.startedAt,
+            perHourRate: perHourRate,
             driverAssignmentStatus: b.driverAssignmentStatus,
             bookingCreatedAt: b.createdAt,
             tripType: b.tripType,
@@ -1401,6 +1425,75 @@ exports.getDriverHistory = async (driverId) => {
 };
 
 /**
+ * Driver: requests this driver REJECTED/SKIPPED (acting-driver offers +
+ * direct driver requests), plus the current skip balance. Lets the driver
+ * app render a "Rejected by me" history with a live skip/strike banner.
+ */
+exports.getDriverRejectedRequests = async (driverId) => {
+    const CustomerDriverRequest = require("../models/CustomerDriverRequest");
+
+    const [actionRejects, directRejects] = await Promise.all([
+        BookingDriverRequest.find({ driverId, requestStatus: "REJECTED" })
+            .populate("customerId", "name phone profileImage")
+            .sort({ rejectedAt: -1 }),
+        CustomerDriverRequest.find({ driverId, requestStatus: "Rejected" })
+            .populate("customerId", "name phone profileImage")
+            .sort({ updatedAt: -1 })
+    ]);
+
+    const list = [];
+
+    actionRejects.forEach((r) => {
+        const customer = r.customerId || {};
+        list.push({
+            id: r._id,
+            type: "action",
+            bookingNumber: r.bookingNumber || "",
+            customer: customer.name || "Customer",
+            photo: customer.profileImage || "",
+            pickup: r.pickupAddress || "Pickup location",
+            drop: r.dropAddress || "Drop location",
+            amount: r.estimatedAmount || 0,
+            durationHours: r.estimatedDurationHours || 0,
+            fromDate: r.fromDate,
+            startTime: r.startTime,
+            endTime: r.endTime,
+            rejectedAt: r.rejectedAt || r.updatedAt || r.createdAt || null,
+            reason: r.rejectionReason || ""
+        });
+    });
+
+    directRejects.forEach((r) => {
+        const customer = r.customerId || {};
+        list.push({
+            id: r._id,
+            type: "direct",
+            bookingNumber: "",
+            customer: customer.name || "Customer",
+            photo: customer.profileImage || "",
+            pickup: r.pickupAddress || "Pickup location",
+            drop: r.dropAddress || "Drop location",
+            amount: r.estimatedFare || 0,
+            durationHours: 0,
+            fromDate: r.requestedAt || r.createdAt || null,
+            startTime: "",
+            endTime: "",
+            rejectedAt: r.updatedAt || r.rejectedAt || r.createdAt || null,
+            reason: "Request skipped by driver"
+        });
+    });
+
+    list.sort((a, b) => new Date(b.rejectedAt || 0) - new Date(a.rejectedAt || 0));
+
+    return {
+        success: true,
+        count: list.length,
+        rejected: list,
+        strikePolicy: await driverPolicy.getStrikeSummary(driverId)
+    };
+};
+
+/**
  * Driver: mark the booking as "heading to pickup".
  */
 exports.driverMarkEnRoute = async (driverId, bookingId) => {
@@ -1484,4 +1577,70 @@ exports.driverMarkArrived = async (driverId, bookingId) => {
 // Expose helper for reuse
 exports.isDriverFree = isDriverFree;
 exports.bookingDays = bookingDays;
+
+/**
+ * Customer: rate the driver of a completed trip. One rating per booking
+ * (enforced by the Rating schema's unique index in a single-winner claim).
+ * Recomputes the driver's running average rating + rating count so the
+ * driver's performance score stays live.
+ */
+exports.rateTrip = async ({ customerId, bookingId, stars, comment }) => {
+    const s = Number(stars);
+    if (!Number.isInteger(s) || s < 1 || s > 5) {
+        throw new Error("Rating must be between 1 and 5 stars");
+    }
+
+    const booking = await Booking.findOne({ _id: bookingId, customerId });
+    if (!booking) throw new Error("Booking not found");
+
+    if (booking.bookingStatus !== "Completed") {
+        throw new Error("You can only rate a completed trip");
+    }
+
+    const driverId = booking.assignedDriverId || booking.driverId;
+    if (!driverId) throw new Error("No driver assigned to this trip");
+
+    let rating;
+    try {
+        rating = await Rating.create({
+            bookingId: booking._id,
+            customerId,
+            driverId,
+            stars: s,
+            comment: String(comment || "").trim()
+        });
+    } catch (err) {
+        if (err && err.code === 11000) {
+            throw new Error("You have already rated this trip");
+        }
+        throw err;
+    }
+
+    // Recompute the driver's average rating (atomic: sum + count are $inc'd,
+    // so concurrent ratings can never skew the mean).
+    const claim = await Driver.findOneAndUpdate(
+        { _id: driverId },
+        { $inc: { ratingSum: s, ratingCount: 1 } },
+        { returnDocument: "after" }
+    );
+
+    if (claim) {
+        const newAvg = claim.ratingSum / claim.ratingCount;
+        await Driver.updateOne(
+            { _id: driverId },
+            { $set: { rating: Math.round(newAvg * 10) / 10 } }
+        );
+    }
+
+    return {
+        success: true,
+        rating: {
+            bookingId: rating.bookingId,
+            driverId: rating.driverId,
+            stars: rating.stars,
+            comment: rating.comment,
+            createdAt: rating.createdAt
+        }
+    };
+};
 

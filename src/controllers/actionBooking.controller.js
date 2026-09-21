@@ -65,7 +65,7 @@ exports.cancelBooking = async (req, res) => {
         const result = await actionBookingService.cancelBooking(
             req.customer.customerId,
             req.params.id,
-            req.body.reason
+            req.body?.reason
         );
         res.json(result);
     } catch (error) {
@@ -140,7 +140,7 @@ exports.rejectRequest = async (req, res) => {
         const result = await actionBookingService.rejectRequest(
             req.driver.driverId,
             req.params.id,
-            req.body.reason
+            req.body?.reason
         );
         res.json(result);
     } catch (error) {
@@ -174,12 +174,23 @@ exports.getDriverHistory = async (req, res) => {
     }
 };
 
+exports.getDriverRejectedRequests = async (req, res) => {
+    try {
+        const result = await actionBookingService.getDriverRejectedRequests(
+            req.driver.driverId
+        );
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 exports.driverCancelBooking = async (req, res) => {
     try {
         const result = await actionBookingService.driverCancelBooking(
             req.driver.driverId,
             req.params.id,
-            req.body.reason
+            req.body?.reason
         );
         res.json(result);
     } catch (error) {
@@ -194,8 +205,8 @@ exports.driverUnavailable = async (req, res) => {
             req.driver.driverId,
             req.params.id,
             {
-                reason: req.body.reason,
-                description: req.body.description
+                reason: req.body?.reason,
+                description: req.body?.description
             }
         );
         res.json(result);
@@ -305,6 +316,21 @@ exports.getTripFare = async (req, res) => {
         const result = await actionBookingService.getTripFare({
             customerId: req.customer.customerId,
             bookingId: req.params.id
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
+// Customer: rate the driver of a completed trip.
+exports.rateTrip = async (req, res) => {
+    try {
+        const result = await actionBookingService.rateTrip({
+            customerId: req.customer.customerId,
+            bookingId: req.params.id,
+            stars: req.body.stars,
+            comment: req.body.comment
         });
         res.json(result);
     } catch (error) {

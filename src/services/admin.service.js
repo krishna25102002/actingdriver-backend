@@ -360,7 +360,7 @@ exports.getAllDrivers = async ({ status, search, limit } = {}) => {
 
     const [drivers, total] = await Promise.all([
         Driver.find(filter)
-            .select("fullName mobileNumber email verificationStatus accountStatus rating totalTrips city isAvailable createdAt")
+            .select("fullName mobileNumber email verificationStatus accountStatus rating ratingCount totalTrips city isAvailable createdAt")
             .sort({ createdAt: -1 })
             .limit(Number(limit) || 100)
             .lean(),

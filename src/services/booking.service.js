@@ -3,6 +3,7 @@ const Driver = require("../models/Driver");
 const CustomerDriverRequest = require("../models/CustomerDriverRequest");
 const dispatchService = require("./dispatch.service");
 const driverPolicy = require("../utils/driverPolicy");
+const pricing = require("../utils/pricing");
 
 /**
  * Create Booking
@@ -117,6 +118,9 @@ exports.acceptBooking = async (bookingId, driverId) => {
 
     await dispatchService.bookingAccepted(booking._id);
 
+    // Accepting a trip resets the driver's skip/cancel strike counter to 0.
+    await driverPolicy.resetStrikes(driverId);
+
     return {
 
         success: true,
@@ -186,7 +190,8 @@ exports.getCurrentRequest = async (driverId) => {
         return {
             success: true,
             message: "No Pending Request",
-            booking: null
+            booking: null,
+            strikePolicy: await driverPolicy.getStrikeSummary(driverId)
         };
     }
 
@@ -198,13 +203,15 @@ exports.getCurrentRequest = async (driverId) => {
         return {
             success: true,
             message: "No Pending Request",
-            booking: null
+            booking: null,
+            strikePolicy: await driverPolicy.getStrikeSummary(driverId)
         };
     }
 
     return {
         success: true,
-        booking
+        booking,
+        strikePolicy: await driverPolicy.getStrikeSummary(driverId)
     };
 };
 
@@ -212,6 +219,44 @@ exports.getCurrentRequest = async (driverId) => {
  * Current Booking
  */
 exports.getCurrentBooking = async (driverId) => {
+
+    // Acting-driver flow: a CONFIRMED or ONGOING acting booking for this driver
+    // (first-accept-wins flow, assigned via assignedDriverId) is the current trip.
+    const acting = await Booking.findOne({
+        assignedDriverId: driverId,
+        bookingStatus: { $in: ["CONFIRMED", "ONGOING"] }
+    })
+        .populate("customerId", "name phone profileImage")
+        .sort({ createdAt: -1 });
+
+    if (acting) {
+        const cfg = await pricing.getConfig();
+        return {
+            success: true,
+            booking: {
+                _id: acting._id,
+                bookingNumber: acting.bookingNumber,
+                customerId: acting.customerId,
+                bookingStatus: acting.bookingStatus,
+                flowStatus: acting.flowStatus,
+                driverAssignmentStatus: acting.driverAssignmentStatus,
+                pickupLocation: acting.pickupLocation,
+                dropLocation: acting.dropLocation,
+                pickupAddress: acting.pickupAddress,
+                dropAddress: acting.dropAddress,
+                estimatedFare: acting.estimatedFare,
+                tripType: acting.tripType,
+                fromDate: acting.fromDate,
+                toDate: acting.toDate,
+                startTime: acting.startTime,
+                endTime: acting.endTime,
+                startedAt: acting.startedAt,
+                driverArrivedAt: acting.driverArrivedAt,
+                acceptedAt: acting.acceptedAt,
+                perHourRate: cfg.actingDriverPerHourRate || 210
+            }
+        };
+    }
 
     const booking = await Booking.findOne({
 

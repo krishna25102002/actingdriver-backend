@@ -71,9 +71,31 @@ const driverSchema = new mongoose.Schema({
         default: 5
     },
 
+    // Number of ratings received — the running average (`rating`) is derived
+    // from this + `ratingSum` so existing `populate("rating")` code keeps
+    // working. Updates are atomic (`ratingSum`/`ratingCount` are $inc'd), so
+    // concurrent ratings can never skew the mean.
+    ratingCount: {
+        type: Number,
+        default: 0
+    },
+
+    ratingSum: {
+        type: Number,
+        default: 0
+    },
+
     totalTrips: {
         type: Number,
         default: 0
+    },
+
+    // Last time the driver ACCEPTED a trip. Any strike (skip/cancel) recorded
+    // before this timestamp is ignored when counting the strike counter, so
+    // accepting a trip resets the "Skipped x/3" limit back to 0.
+    strikeResetAt: {
+        type: Date,
+        default: null
     },
 
     isAvailable: {

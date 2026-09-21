@@ -114,7 +114,8 @@ exports.getPendingRequestsForDriver = async (driverId) => {
 
     return {
         success: true,
-        request
+        request,
+        strikePolicy: await driverPolicy.getStrikeSummary(driverId)
     };
 };
 
@@ -193,6 +194,9 @@ exports.acceptRequest = async (driverId, requestId) => {
         currentBookingId: booking._id,
         currentDispatchRequest: null
     });
+
+    // Accepting a trip resets the driver's skip/cancel strike counter to 0.
+    await driverPolicy.resetStrikes(driverId);
 
     return {
         success: true,

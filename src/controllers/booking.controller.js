@@ -229,7 +229,7 @@ exports.cancelTrip = async (req, res) => {
         const result = await bookingService.cancelTrip(
             req.params.bookingNumber,
             req.driver.driverId,
-            req.body.reason
+            req.body?.reason
         );
 
         res.status(200).json(result);

@@ -1,5 +1,6 @@
 const Booking = require("../models/Booking");
 const Driver = require("../models/Driver");
+const driverPolicy = require("../utils/driverPolicy");
 
 exports.getDashboard = async (driverId) => {
 
@@ -143,7 +144,9 @@ exports.getDashboard = async (driverId) => {
 
             rating: driver.rating,
 
-            onlineStatus: driver.accountStatus
+            onlineStatus: driver.accountStatus,
+
+            strikePolicy: await driverPolicy.getStrikeSummary(driverId)
 
         }
 

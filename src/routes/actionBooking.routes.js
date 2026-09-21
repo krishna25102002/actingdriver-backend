@@ -79,6 +79,13 @@ router.get(
     actionBookingController.getTripFare
 );
 
+// Customer: rate the driver of a completed trip (recomputes driver rating).
+router.post(
+    "/customers/bookings/:id/rate",
+    customerAuthMiddleware,
+    actionBookingController.rateTrip
+);
+
 // =====================
 // DRIVER — acting driver booking flow
 // =====================
@@ -116,6 +123,12 @@ router.get(
     "/drivers/bookings/history",
     authMiddleware,
     actionBookingController.getDriverHistory
+);
+
+router.get(
+    "/drivers/bookings/rejected",
+    authMiddleware,
+    actionBookingController.getDriverRejectedRequests
 );
 
 router.post(
