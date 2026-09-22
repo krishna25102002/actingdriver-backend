@@ -4,6 +4,7 @@ const CustomerDriverRequest = require("../models/CustomerDriverRequest");
 const dispatchService = require("./dispatch.service");
 const driverPolicy = require("../utils/driverPolicy");
 const pricing = require("../utils/pricing");
+const bookingMail = require("./bookingMail.service");
 
 /**
  * Create Booking
@@ -120,6 +121,9 @@ exports.acceptBooking = async (bookingId, driverId) => {
 
     // Accepting a trip resets the driver's skip/cancel strike counter to 0.
     await driverPolicy.resetStrikes(driverId);
+
+    // Send booking-confirmation emails to customer + driver (non-blocking failure).
+    await bookingMail.sendConfirmationEmails(booking);
 
     return {
 
@@ -472,6 +476,30 @@ exports.completeTrip = async (
     booking.completedAt = new Date();
 
     booking.tripStatus = "Trip Completed";
+
+    // Normalize fare/earnings so legacy trips populate the same fields as the
+    // acting-driver flow (drives rating, earnings, receipts emails).
+    try {
+        const startedAt = booking.tripStartedAt || booking.startedAt;
+        const minutes = startedAt
+            ? Math.max(1, Math.round((Date.now() - new Date(startedAt).getTime()) / 60000))
+            : (booking.estimatedDuration || 1) * 60;
+        const fare = await pricing.computeActualFare({ minutes });
+
+        booking.actualHours = fare.billableHours;
+        booking.actualFare = fare.total;
+        booking.driverEarning = fare.baseFare;
+        booking.fareBreakup = booking.fareBreakup || {};
+        booking.fareBreakup.billableHours = fare.billableHours;
+        booking.fareBreakup.baseFare = fare.baseFare;
+        booking.fareBreakup.platformFee = fare.platformFee;
+        booking.fareBreakup.taxGst = fare.taxGst;
+        booking.fareBreakup.total = fare.total;
+        booking.fareBreakup.perHourRate = fare.perHourRate;
+    } catch (fareErr) {
+        booking.actualFare = booking.actualFare || booking.estimatedFare;
+        booking.driverEarning = booking.driverEarning || booking.estimatedFare || 0;
+    }
 
     await booking.save();
 

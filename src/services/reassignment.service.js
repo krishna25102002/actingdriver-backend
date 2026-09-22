@@ -10,6 +10,7 @@ const { isDriverFree, timeToMinutes } = bookingTime;
 const logger = require("../utils/logger");
 const pricing = require("../utils/pricing");
 const cancellationPolicy = require("../utils/cancellationPolicy");
+const { notifyBookingEnded, notifyTrackingStopped } = require("../sockets/location.socket");
 
 /**
  * Reassignment engine for the acting-driver flow ("Driver Go Acting Driver").
@@ -345,6 +346,8 @@ const failReplacement = async (booking, cause, by = "system") => {
         oldStatus: "DRIVER_REASSIGNING", newStatus: "SYSTEM_CANCELLED", reason: cause
     });
 
+    notifyBookingEnded(claim._id, "cancelled");
+
     return {
         success: true,
         reassigned: false,
@@ -427,6 +430,8 @@ const triggerReassignment = async ({ bookingId, driverId, reason = "", descripti
         bookingId: claim._id, driverId,
         oldStatus: "DRIVER_CONFIRMED", newStatus: "DRIVER_REASSIGNING", reason
     });
+
+    notifyTrackingStopped(claim._id.toString());
 
     return runReassignmentRound(claim, cfg, actor);
 };
@@ -680,6 +685,8 @@ const adminCancel = async (adminId, bookingId, { reason = "" } = {}) => {
         cancellationFee: 0,
         amountDue: 0
     });
+
+    notifyBookingEnded(bookingId, "cancelled");
 
     return { success: true, message: "Booking cancelled by admin." };
 };

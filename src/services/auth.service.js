@@ -6,6 +6,10 @@ const jwt = require("jsonwebtoken");
 
 exports.register = async (data) => {
 
+    if (!data.email || !String(data.email).trim()) {
+        throw new Error("Email is required");
+    }
+
     const existingDriver = await Driver.findOne({
         mobileNumber: data.mobileNumber
     });

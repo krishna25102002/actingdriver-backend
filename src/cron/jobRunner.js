@@ -154,7 +154,7 @@ const sweepDriverNoShow = async () => {
         bookingStatus: "CONFIRMED",
         assignedDriverId: { $ne: null },
         flowStatus: { $in: ["DRIVER_CONFIRMED", "DRIVER_EN_ROUTE"] }
-    }).select("_id assignedDriverId fromDate startTime toDate");
+    }).select("_id assignedDriverId fromDate startTime endTime toDate");
 
     for (const b of docs) {
         if (!b.fromDate) continue;
@@ -164,6 +164,18 @@ const sweepDriverNoShow = async () => {
             pickup.setHours(Math.floor(t / 60), t % 60, 0, 0);
         }
         if (isNaN(pickup.getTime()) || pickup.getTime() > cutoff.getTime()) continue;
+
+        // Overnight / midnight-crossing trips (e.g. 11:55 PM -> 2:55 AM): the
+        // scheduled end falls on the next calendar day. Do not declare a
+        // no-show while the trip's own window is still running, otherwise the
+        // trip silently gets reassigned in the middle of the night.
+        const endMin = timeToMinutes(b.endTime);
+        if (t != null && endMin != null && endMin <= t) {
+            const windowEnd = new Date(b.fromDate);
+            windowEnd.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0);
+            windowEnd.setDate(windowEnd.getDate() + 1);
+            if (windowEnd.getTime() > Date.now()) continue;
+        }
 
         try {
             const res = await reassignment.markDriverNoShow({

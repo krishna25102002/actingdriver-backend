@@ -125,6 +125,24 @@ const driverSchema = new mongoose.Schema({
             default: [0, 0]
         }
     },
+
+    // Live-location metadata attached to the GeoJSON `location` above.
+    locationUpdatedAt: {
+        type: Date,
+        default: null
+    },
+    locationAccuracy: {
+        type: Number,
+        default: 0
+    },
+    heading: {
+        type: Number,
+        default: 0
+    },
+    speed: {
+        type: Number,
+        default: 0
+    },
     settings: {
 
     language: {

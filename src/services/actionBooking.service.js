@@ -15,6 +15,8 @@ const reassignment = require("./reassignment.service");
 const cancellationPolicy = require("../utils/cancellationPolicy");
 const driverPolicy = require("../utils/driverPolicy");
 const logger = require("../utils/logger");
+const bookingMail = require("./bookingMail.service");
+const { notifyBookingEnded } = require("../sockets/location.socket");
 
 const generateBookingNumber = () => {
     const now = new Date();
@@ -37,7 +39,7 @@ exports.getAvailableDrivers = async (data) => {
         accountStatus: { $in: ["Online"] },
         isAvailable: true
     }).select(
-        "fullName profilePhoto rating experience totalTrips mobileNumber isAvailable location"
+        "fullName profilePhoto rating ratingCount experience totalTrips mobileNumber isAvailable location"
     );
 
     const available = [];
@@ -52,7 +54,8 @@ exports.getAvailableDrivers = async (data) => {
             driverId: driver._id,
             fullName: driver.fullName,
             profilePhoto: driver.profilePhoto,
-            rating: driver.rating,
+rating: driver.rating,
+            ratingCount: driver.ratingCount,
             experience: driver.experience,
             totalTrips: driver.totalTrips,
             mobileNumber: driver.mobileNumber,
@@ -349,6 +352,9 @@ exports.acceptRequest = async (driverId, requestId) => {
 
     // Accepting a trip resets the driver's skip/cancel strike counter to 0.
     await driverPolicy.resetStrikes(driverId);
+
+    // Send booking-confirmation emails to customer + driver (non-blocking failure).
+    await bookingMail.sendConfirmationEmails(booking);
 
     return {
         success: true,
@@ -813,7 +819,7 @@ await Driver.findByIdAndUpdate(driverId, {
                 $inc: { totalTrips: 1 }
             });
 
-            const result = {
+const result = {
                 billableHours: fare.billableHours,
                 baseFare: fare.baseFare,
                 platformFee: fare.platformFee,
@@ -823,6 +829,9 @@ await Driver.findByIdAndUpdate(driverId, {
                 completedAt: b.completedAt
             };
             b._fareSnapshot = result;
+
+            notifyBookingEnded(bookingId, "completed");
+            bookingMail.sendTripCompletionEmails(b);
         }
     }).then((res) => {
         if (res && res.booking && res.booking._fareSnapshot) {
@@ -910,10 +919,11 @@ exports.handlePaymentLinkCallback = async (paymentLinkId) => {
         return { success: false, message: "Could not verify payment status with Razorpay." };
     }
 
-    if (link && link.status === "paid") {
+if (link && link.status === "paid") {
         booking.paymentStatus = "Paid";
         booking.paymentGatewayId = link.payment_id || booking.paymentGatewayId;
         await booking.save();
+        bookingMail.sendPaymentReceiptEmails(booking);
         return { success: true, message: "Payment verified successfully.", booking };
     }
 
@@ -944,7 +954,7 @@ exports.verifyPayment = async ({ customerId, bookingId, razorpayOrderId, razorpa
         throw new Error("Invalid payment signature");
     }
 
-    await Booking.updateOne(
+await Booking.updateOne(
         { _id: booking._id, paymentStatus: { $ne: "Paid" } },
         {
             paymentStatus: "Paid",
@@ -952,6 +962,10 @@ exports.verifyPayment = async ({ customerId, bookingId, razorpayOrderId, razorpa
             paymentSignature: signature || ""
         }
     );
+
+    booking.paymentStatus = "Paid";
+    booking.paymentGatewayId = razorpayPaymentId || "";
+    bookingMail.sendPaymentReceiptEmails(booking);
 
     return { success: true, message: "Payment verified successfully." };
 };
@@ -1158,7 +1172,7 @@ exports.cancelBooking = async (customerId, bookingId, reason) => {
         amountDue
     });
 
-    logger.logEvent("customer_cancelled", {
+logger.logEvent("customer_cancelled", {
         bookingId: claim._id,
         driverId: hadDriver,
         oldStatus: beforeStatus,
@@ -1166,6 +1180,8 @@ exports.cancelBooking = async (customerId, bookingId, reason) => {
         reason: reason || "",
         meta: { cancellationFee, amountDue }
     });
+
+    notifyBookingEnded(claim._id, "cancelled");
 
     return {
         success: true,
@@ -1361,6 +1377,8 @@ exports.driverCancelBooking = async (driverId, bookingId, reason = "") => {
         reason: reason || ""
     });
 
+    notifyBookingEnded(claim._id, "cancelled");
+
     return {
         success: true,
         message: "Booking cancelled successfully.",
@@ -1400,6 +1418,8 @@ exports.getDriverHistory = async (driverId) => {
         endTime: b.endTime,
         pickupAddress: b.pickupAddress,
         dropAddress: b.dropAddress,
+        pickupLocation: b.pickupLocation || null,
+        dropLocation: b.dropLocation || null,
         amount: b.estimatedFare,
         tripType: b.tripType,
         acceptedAt: b.acceptedAt,

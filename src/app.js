@@ -25,6 +25,7 @@ const { driverRequestRouter } = require("./routes/customerDriverRequest.routes")
 const actionBookingRoutes = require("./routes/actionBooking.routes");
 const payLinkRoutes = require("./routes/payLink.routes");
 const publicConfigRoutes = require("./routes/publicConfig.routes");
+const locationRoutes = require("./routes/location.routes");
 
 const app = express();
 
@@ -171,6 +172,11 @@ app.use("/api/action/payments", payLinkRoutes);
 // Public / Admin App Config (per-hour rate etc.)
 // =====================
 app.use("/api/config", publicConfigRoutes);
+
+// =====================
+// Live location + map proxies
+// =====================
+app.use("/api", locationRoutes);
 
 app.get("/", (req, res) => {
 

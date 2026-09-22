@@ -409,6 +409,33 @@ otpVerified: {
         default: null
     },
 
+    // ==================== Live location tracking ====================
+    // Mirror of the LatestLocation cache for cheap REST fallback after a
+    // customer/driver restarts the app. Coordinates are sanity-checked
+    // server-side and never trusted from the socket payload unvalidated.
+    latestDriverLocation: {
+        latitude: { type: Number, default: 0 },
+        longitude: { type: Number, default: 0 },
+        accuracy: { type: Number, default: 0 },
+        heading: { type: Number, default: 0 },
+        speed: { type: Number, default: 0 },
+        timestamp: { type: Date, default: null }
+    },
+
+    latestCustomerLocation: {
+        latitude: { type: Number, default: 0 },
+        longitude: { type: Number, default: 0 },
+        accuracy: { type: Number, default: 0 },
+        timestamp: { type: Date, default: null }
+    },
+
+    // "Active" while live location sharing is running for this booking.
+    trackingStatus: {
+        type: String,
+        enum: ["Inactive", "Active"],
+        default: "Inactive"
+    },
+
 }, 
 {
     timestamps: true

@@ -16,4 +16,11 @@ router.get("/profile", customerAuthMiddleware, customerAuthController.getProfile
 // Update Logged-in Customer Profile
 router.put("/profile", customerAuthMiddleware, customerAuthController.updateProfile);
 
+// Forgot Password (email OTP flow)
+router.post("/forgotPassword", customerAuthController.forgotPassword);
+
+router.post("/verifyResetOtp", customerAuthController.verifyResetOtp);
+
+router.post("/resetPassword", customerAuthController.resetPassword);
+
 module.exports = router;

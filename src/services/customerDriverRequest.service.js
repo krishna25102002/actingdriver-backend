@@ -3,6 +3,7 @@ const Driver = require("../models/Driver");
 const Customer = require("../models/Customer");
 const Booking = require("../models/Booking");
 const driverPolicy = require("../utils/driverPolicy");
+const bookingMail = require("./bookingMail.service");
 
 exports.createRequest = async (customerId, data) => {
 
@@ -197,6 +198,9 @@ exports.acceptRequest = async (driverId, requestId) => {
 
     // Accepting a trip resets the driver's skip/cancel strike counter to 0.
     await driverPolicy.resetStrikes(driverId);
+
+    // Send booking-confirmation emails to customer + driver (non-blocking failure).
+    await bookingMail.sendConfirmationEmails(booking);
 
     return {
         success: true,

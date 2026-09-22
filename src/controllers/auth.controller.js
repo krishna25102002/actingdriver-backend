@@ -1,7 +1,7 @@
 const authService = require("../services/auth.service");
+const passwordResetService = require("../services/passwordReset.service");
 const Driver = require("../models/driver");
 const bcrypt = require("bcrypt");
-
 
 exports.register = async (req, res) => {
 
@@ -118,6 +118,45 @@ exports.getProfile = async (req, res) => {
                 success: false,
                 message: error.message
             });
+        }
+    };
+
+    exports.forgotPassword = async (req, res) => {
+        try {
+            const result = await passwordResetService.requestReset({
+                email: req.body.email,
+                role: "driver"
+            });
+            res.status(200).json(result);
+        } catch (error) {
+            res.status(400).json({ success: false, message: error.message });
+        }
+    };
+
+    exports.verifyResetOtp = async (req, res) => {
+        try {
+            const result = await passwordResetService.verifyOtp({
+                email: req.body.email,
+                role: "driver",
+                otp: req.body.otp
+            });
+            res.status(200).json(result);
+        } catch (error) {
+            res.status(400).json({ success: false, message: error.message });
+        }
+    };
+
+    exports.resetPassword = async (req, res) => {
+        try {
+            const result = await passwordResetService.resetPassword({
+                email: req.body.email,
+                role: "driver",
+                otp: req.body.otp,
+                newPassword: req.body.newPassword
+            });
+            res.status(200).json(result);
+        } catch (error) {
+            res.status(400).json({ success: false, message: error.message });
         }
     };
     

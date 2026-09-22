@@ -20,6 +20,13 @@ router.get("/profile", authMiddleware, authController.getProfile);
 // Change Password
 router.put("/changePassword", authMiddleware, authController.changePassword);
 
+// Forgot Password (email OTP flow)
+router.post("/forgotPassword", authController.forgotPassword);
+
+router.post("/verifyResetOtp", authController.verifyResetOtp);
+
+router.post("/resetPassword", authController.resetPassword);
+
 // Logout (optional for now)
 router.post("/logout", authMiddleware, authController.logout);
 

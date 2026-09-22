@@ -9,4 +9,7 @@ router.get("/nearby", customerDriverController.getNearbyDrivers);
 // Get Driver by ID
 router.get("/:id", customerDriverController.getDriverById);
 
+// Get full public Driver Profile (real stats + reviews)
+router.get("/:id/profile", customerDriverController.getDriverProfile);
+
 module.exports = router;
